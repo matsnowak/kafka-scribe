@@ -15,7 +15,7 @@ The core philosophy is built on three distinct, sequential stages:
 ### 1.2 Design Principles
 
 - **Stateless Operation**: Every command is self-contained with all required parameters passed directly as arguments, ensuring clarity and scriptability.
-- **Extensibility**: The tool is designed to be easily extended to support different storage backends and Kafka configurations.
+- **Extensibility**: The tool is designed to be easily extended to support different storage backends, message formats, and Kafka configurations.
 - **Performance**: Optimized for handling high-volume Kafka topics efficiently.
 - **Developer Experience**: Intuitive CLI interface with comprehensive documentation and helpful error messages.
 - **Testability**: Components are designed to be easily testable in isolation.
@@ -72,6 +72,7 @@ kscribe store <topic> --bootstrap-servers <servers> [OPTIONS]
 * `--to-file <path>`: Store messages into a single file.
 * `--to-db <connection-string>`: Store messages in a database.
 * `--table-name <name>`: Table name for database storage (defaults to topic name).
+* `--format <json|avro|protobuf|binary|string>`: Format to use for message values (default: json).
 
 #### 3.1.3 Source Range Selection
 
@@ -234,6 +235,8 @@ kscribe replay --to-topic <target-topic> --bootstrap-servers <servers> [OPTIONS]
 * `--delay-ms <ms>`: Add a delay between replaying each message.
 * `--override-key <new-key>`: Publish all messages with a new, static key.
 * `--add-header <key=value>`: Add a new header to every replayed message.
+* `--format <json|avro|protobuf|binary|string>`: Format to use for message values (default: json).
+* `--output-format <json|avro|protobuf|binary|string>`: Format to convert messages to when replaying (default: same as input format).
 * `--dry-run`: Simulate the replay without actually sending messages.
 
 #### 3.3.3 Replay Modes
@@ -411,13 +414,173 @@ kscribe validate --transform-script ./transform.js
 ```
 
 
-## 5. Testing, Error Handling, and Performance
+## 5. Message Format Support
 
-### 5.1 Testing Strategy
+`kafka-scribe` is designed to work with various message formats commonly used with Kafka, providing flexibility for different use cases and integration scenarios.
+
+### 5.1 Supported Formats
+
+The tool supports the following message formats:
+
+1. **JSON**: The default format, suitable for most use cases with good human readability and wide tool support.
+2. **Avro**: Schema-based format with compact binary serialization, ideal for structured data with schema evolution.
+3. **Protobuf**: Efficient binary format with strong typing and schema evolution support.
+4. **Binary**: Raw binary data for custom formats or when the structure is unknown.
+5. **String**: Plain text format for simple messages or logs.
+
+### 5.2 Format Handling Architecture
+
+The format handling system is designed with a pluggable architecture:
+
+```rust
+/// Trait for handling different message formats
+pub trait MessageFormat {
+    /// Name of the format (e.g., "json", "avro")
+    fn name(&self) -> &'static str;
+
+    /// File extension for this format (e.g., "json", "avro")
+    fn file_extension(&self) -> &'static str;
+
+    /// Content type for this format (e.g., "application/json")
+    fn content_type(&self) -> &'static str;
+
+    /// Deserialize bytes into a structured representation
+    fn deserialize(&self, bytes: &[u8]) -> Result<Value, FormatError>;
+
+    /// Serialize structured data into bytes
+    fn serialize(&self, value: &Value) -> Result<Vec<u8>, FormatError>;
+
+    /// Check if data is likely in this format
+    fn detect(&self, bytes: &[u8]) -> bool;
+}
+
+// Built-in format implementations
+pub struct JsonFormat;
+pub struct AvroFormat;
+pub struct ProtobufFormat;
+pub struct BinaryFormat;
+pub struct StringFormat;
+```
+
+### 5.3 Format Registry
+
+Formats are managed through a central registry that allows for discovery and extension:
+
+```rust
+/// Registry for message formats
+pub struct FormatRegistry {
+    formats: HashMap<String, Box<dyn MessageFormat>>,
+}
+
+impl FormatRegistry {
+    /// Register a new format
+    pub fn register<F: MessageFormat + 'static>(&mut self, format: F) {
+        self.formats.insert(format.name().to_string(), Box::new(format));
+    }
+
+    /// Get a format by name
+    pub fn get(&self, name: &str) -> Option<&dyn MessageFormat> {
+        self.formats.get(name).map(|f| f.as_ref())
+    }
+
+    /// Detect format from content
+    pub fn detect_format(&self, bytes: &[u8]) -> Option<&dyn MessageFormat> {
+        self.formats.values()
+            .find(|format| format.detect(bytes))
+            .map(|f| f.as_ref())
+    }
+}
+```
+
+### 5.4 Schema Management
+
+For schema-based formats (Avro, Protobuf), `kafka-scribe` provides schema management capabilities:
+
+1. **Schema Discovery**: Automatically detect and extract schemas from messages
+2. **Schema Storage**: Store schemas alongside messages for future reference
+3. **Schema Evolution**: Handle schema changes during replay operations
+
+Example schema handling:
+
+```bash
+# Store messages with schema detection
+kscribe store orders --bootstrap-servers kafka:9092 --format avro --store-schema
+
+# View detected schema
+kscribe schema show --from-dir ./orders_data
+
+# Replay with schema validation
+kscribe replay --from-dir ./orders_data --to-topic orders-test --validate-schema
+```
+
+### 5.5 Format Conversion
+
+`kafka-scribe` supports converting between formats during replay:
+
+```bash
+# Convert from Avro to JSON during replay
+kscribe replay --from-dir ./orders_data --format avro --output-format json --to-topic orders-json
+```
+
+The conversion system handles:
+
+1. **Type Mapping**: Mapping between different type systems
+2. **Schema Translation**: Converting schema information between formats
+3. **Data Preservation**: Ensuring data fidelity during conversion
+
+### 5.6 Custom Format Plugins
+
+Developers can add support for custom formats by implementing the `MessageFormat` trait:
+
+```rust
+// Example custom format implementation
+pub struct MyCustomFormat;
+
+impl MessageFormat for MyCustomFormat {
+    fn name(&self) -> &'static str {
+        "mycustom"
+    }
+
+    fn file_extension(&self) -> &'static str {
+        "mcf"
+    }
+
+    fn content_type(&self) -> &'static str {
+        "application/x-mycustom"
+    }
+
+    fn deserialize(&self, bytes: &[u8]) -> Result<Value, FormatError> {
+        // Custom deserialization logic
+        // ...
+    }
+
+    fn serialize(&self, value: &Value) -> Result<Vec<u8>, FormatError> {
+        // Custom serialization logic
+        // ...
+    }
+
+    fn detect(&self, bytes: &[u8]) -> bool {
+        // Custom format detection logic
+        // ...
+    }
+}
+
+// Usage in application code
+fn register_formats(registry: &mut FormatRegistry) {
+    registry.register(JsonFormat);
+    registry.register(AvroFormat);
+    registry.register(ProtobufFormat);
+    registry.register(MyCustomFormat);
+}
+```
+
+## 6. Testing, Error Handling, and Performance
+
+### 6.1 Testing Strategy
 
 `kafka-scribe` is designed with testability as a core principle. The testing approach includes:
 
-#### 5.1.1 Unit Tests
+#### 6.1.1 Unit Tests
 
 Each component is designed to be testable in isolation:
 
@@ -446,7 +609,7 @@ mod tests {
 }
 ```
 
-#### 5.1.2 Integration Tests
+#### 6.1.2 Integration Tests
 
 Integration tests verify the end-to-end functionality using:
 
@@ -491,7 +654,7 @@ async fn test_store_and_replay() {
 }
 ```
 
-#### 5.1.3 Property-Based Testing
+#### 6.1.3 Property-Based Testing
 
 For complex logic, property-based testing ensures correctness across a wide range of inputs:
 
@@ -508,11 +671,11 @@ fn test_message_transformation_properties() {
 }
 ```
 
-### 5.2 Error Handling and Debugging
+### 6.2 Error Handling and Debugging
 
 `kafka-scribe` implements a comprehensive error handling strategy:
 
-#### 5.2.1 Error Types
+#### 6.2.1 Error Types
 
 A centralized error type system with specific error variants:
 
@@ -536,7 +699,7 @@ pub enum ScribeError {
 }
 ```
 
-#### 5.2.2 Error Reporting
+#### 6.2.2 Error Reporting
 
 Errors are reported with:
 
@@ -545,7 +708,7 @@ Errors are reported with:
 3. **Suggestions**: Potential solutions
 4. **Debug Info**: Additional information for troubleshooting
 
-#### 5.2.3 Debugging Features
+#### 6.2.3 Debugging Features
 
 1. **Verbose Mode**: Detailed logging with `--verbose`
 2. **Dry Run Mode**: Simulate operations with `--dry-run`
