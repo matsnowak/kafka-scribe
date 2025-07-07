@@ -1,6 +1,6 @@
-# Design Document: kafka-scribe (Stateless Version)
+# Design Document: kafka-scribe
 
-## 1. Introduction \& Philosophy
+## 1. Introduction & Philosophy
 
 **kafka-scribe** is a high-performance command-line interface (CLI) tool designed for developers and operators working with Apache Kafka. Its primary purpose is to "transcribe" messages from one state to another—capturing them from a topic, enabling analysis and modification, and replaying them.
 
@@ -20,7 +20,14 @@ The core philosophy is built on three distinct, sequential stages:
 - **Developer Experience**: Intuitive CLI interface with comprehensive documentation and helpful error messages.
 - **Testability**: Components are designed to be easily testable in isolation.
 
-## 2. CLI Command Structure \& Design
+### 1.3 MVP Scope
+
+The initial release focuses on:
+- File-based storage with JSON format
+- Basic filtering and range selection
+- Simple replay functionality
+
+## 2. CLI Command Structure & Design
 
 ### 2.1 Command Philosophy
 
@@ -52,6 +59,15 @@ All commands follow these consistent patterns:
 
 5. **Verbosity Control**: All commands support `--verbose` and `--quiet` flags to control output detail level.
 
+### 2.4 Configuration File Support
+
+To reduce command verbosity, kafka-scribe supports configuration files:
+
+```
+# ~/.kscribe.yaml
+default_bootstrap_servers: "localhost:9092"
+default_storage_dir: "./kscribe-data"
+```
 
 ## 3. The Three Stages of `kafka-scribe`
 

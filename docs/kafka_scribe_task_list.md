@@ -1,4 +1,4 @@
-# Tasks for kafka-scribe Implementation
+# Tasks for kafka-scribe Implementation (Prioritized for MVP)
 
 ## Project Setup and Infrastructure
 
@@ -6,7 +6,7 @@
 - **ID:** 1
 - **Title:** Create project scaffolding
 - **Status:** TODO
-- **Priority:** HIGH
+- **Priority:** CRITICAL
 - **Description:** Set up the basic Rust project structure with Cargo.toml, directory structure, and initial README.
 - **Acceptance Criteria:**
   - Project builds with `cargo build`
@@ -18,7 +18,7 @@
 ### Task 2
 - **ID:** 2
 - **Title:** Setup CI/CD pipeline
-- **Status:** TODO
+- **Status:** DEFERRED
 - **Priority:** MEDIUM
 - **Description:** Configure GitHub Actions or similar CI/CD pipeline for automated testing and release management.
 - **Acceptance Criteria:**
@@ -27,7 +27,7 @@
   - Code formatting is verified
   - Release workflow creates versioned binaries
 - **Dependencies:** 1
-- **Notes:** Consider using cargo-release for version management.
+- **Notes:** Defer until core functionality is proven. Consider using cargo-release for version management.
 
 ### Task 3
 - **ID:** 3
@@ -92,9 +92,9 @@
 ### Task 7
 - **ID:** 7
 - **Title:** Implement file-based StorageBackend
-- **Status:** TODO
-- **Priority:** HIGH
-- **Description:** Create a storage backend that writes messages to individual files in a directory or a single file.
+- **Status:** TODO  
+- **Priority:** CRITICAL
+- **Description:** Create a file-based storage backend for JSON messages (MVP implementation).
 - **Acceptance Criteria:**
   - Can write to directory with one file per message
   - Can write to a single file with message concatenation
@@ -102,14 +102,16 @@
   - Includes appropriate error handling and recovery
   - Comprehensive test coverage
 - **Dependencies:** 5
-- **Notes:** Consider using async file I/O for performance.
+- **Notes:** Focus on JSON format only for MVP. Consider using async file I/O for performance.
 
 ### Task 8
 - **ID:** 8
 - **Title:** Implement SQLite StorageBackend
-- **Status:** TODO
+- **Status:** DEFERRED
 - **Priority:** MEDIUM
-- **Description:** Create a storage backend that writes messages to a SQLite database.
+- **Description:** Create a storage backend that writes messages to a SQLite database. 
+- **MVP_STATUS:** DEFERRED_TO_PHASE_2
+- **Description:** DEFERRED: Create a storage backend that writes messages to a SQLite database.
 - **Acceptance Criteria:**
   - Creates appropriate table structure automatically
   - Efficiently stores all message attributes

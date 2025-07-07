@@ -1,4 +1,4 @@
-# Improvement Plan for kafka-scribe
+# Implementation and Improvement Plan for kafka-scribe
 
 ## Introduction
 
@@ -6,9 +6,22 @@ This document outlines a comprehensive improvement plan for the kafka-scribe pro
 
 ## 1. Core Functionality Enhancements
 
+### 1.0 MVP Implementation Priority
+
+**Phase 1 (MVP)**: Focus on core value delivery
+- File-based storage with JSON format only
+- Basic Kafka consumer/producer integration
+- Simple filtering (key, partition, time/offset ranges)
+- Command-line interface with essential commands
+
+**Phase 2 (Enhancement)**: Add advanced features
+- Database storage backends
+- Additional message formats
+- Interactive and transformation modes
+
 ### 1.1 Message Format Support Expansion
 
-**Current State**: The design supports JSON, Avro, Protobuf, Binary, and String formats.
+**Current State**: MVP supports JSON format only.
 
 **Proposed Improvements**:
 - Implement schema registry integration for Avro and Protobuf formats
