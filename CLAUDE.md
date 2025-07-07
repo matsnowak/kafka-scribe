@@ -1,4 +1,4 @@
-````# CLAUDE.md
+`````````# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -104,4 +104,72 @@ The initial release focuses on:
 - Comprehensive error handling and testing
 
 Database storage, advanced transformations, and schema registry integration are deferred to Phase 2.
-````
+
+## AI Agent Coordination
+
+### Task Selection Protocol
+1. **Check Dependencies**: Only select tasks marked as TODO with all dependencies COMPLETED
+2. **Follow Priority Order**: CRITICAL → HIGH → MEDIUM → LOW
+3. **Update Status**: Change task status to IN_PROGRESS when starting work
+4. **Single Agent Rule**: Only one agent should work on a task at a time
+
+### Status Updates Required
+- **Daily**: Current task, progress percentage, blockers encountered
+- **On Completion**: Update task status to COMPLETED, provide implementation summary
+- **On Blocking**: Update status to BLOCKED, describe the specific blocker
+
+### Handoff Procedures
+- **Code Review**: All implementations require review before marking COMPLETED
+- **Integration Testing**: Verify new code works with existing components
+- **Documentation**: Update relevant docs when adding new features
+
+
+## Quality Gates
+
+### Definition of Done
+Before marking any task as COMPLETED:
+- [ ] All acceptance criteria met
+- [ ] Unit tests written and passing
+- [ ] Code follows Rust best practices
+- [ ] Documentation updated if needed
+- [ ] Integration with existing code verified
+- [ ] No breaking changes to existing functionality
+
+### Code Quality Standards
+- Use comprehensive error handling with `thiserror`/`anyhow`
+- Write idiomatic, safe Rust code
+- Document all public APIs with rustdoc comments
+- Follow the Rust API guidelines
+- Maintain >80% test coverage for core modules
+
+
+## Communication Protocols
+
+### Escalation Triggers
+Immediately escalate when:
+- Task acceptance criteria are unclear or contradictory
+- Technical blockers cannot be resolved within 4 hours
+- Architecture decisions need clarification
+- Scope creep is identified in task requirements
+
+### Context Preservation
+- **Reference Key Files**: Always check design-document.md and task list before starting
+- **Maintain Decision History**: Document important implementation decisions
+- **Update Task Notes**: Add relevant information to task notes section
+
+### Current Status (Updated)
+The project is in **Phase 1: Foundation** with these immediate priorities:
+
+**Week 1-2 Focus**:
+- Task #1: Project scaffolding (CRITICAL)
+- Task #3: CLI argument parsing (CRITICAL)  
+- Task #4: KafkaMessage data structure (CRITICAL)
+- Task #5: StorageBackend trait (CRITICAL)
+
+**Next Steps**:
+- Task #7: File-based storage implementation
+- Task #15: Kafka consumer integration
+- Task #17: Store command implementation
+
+
+`````````
