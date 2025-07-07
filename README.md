@@ -2,42 +2,76 @@
 
 A high-performance CLI tool for Kafka message capture, analysis, and replay.
 
+## Project Status
+
+🚧 **Currently in Development - MVP Phase** 🚧
+
+This project is in active development. The basic project scaffolding is complete, but core functionality is still being implemented. See the [task list](kafka_scribe_task_list.md) for current progress.
+
 ## Overview
 
-**kafka-scribe** enables developers and operators to:
+**kafka-scribe** will enable developers and operators to:
 
 1. **Store** messages from Kafka topics to files or databases
 2. **Analyze** messages using familiar tools (grep, jq, SQL)
 3. **Replay** messages back to Kafka with optional transformations
 
-## Key Features
+## Architecture
 
-- **Flexible Storage**: Store messages in files or databases
-- **Powerful Filtering**: Select messages by offset, timestamp, key pattern, or headers
-- **Interactive Replay**: Review and modify messages before replaying
-- **Transformation Support**: Apply JavaScript transformations to messages
-- **Performance Optimized**: Parallel processing and configurable batching
+The tool follows a three-stage workflow:
+- **Store** → **Analyze** → **Replay**
 
-## Quick Start
+Built with a modular Rust architecture featuring pluggable storage backends and message format handlers.
+
+## Current Implementation
+
+### ✅ Completed
+- Project scaffolding with full module structure
+- CLI interface framework with clap
+- Core data structures (`KafkaMessage`, error handling, configuration)
+- Storage backend trait definitions
+- Comprehensive test setup
+
+### 🚧 In Progress
+- Command implementations (store, replay, stats)
+- Kafka integration (consumer/producer)
+- File-based storage backends
+
+### 📋 Planned Features
+- Database storage (SQLite, PostgreSQL)
+- Message format support (JSON, Avro, Protobuf)
+- Interactive replay modes
+- JavaScript transformations
+- Performance optimizations
+
+## Development
 
 ```bash
-# Install
-cargo install kafka-scribe
+# Build the project
+cargo build
 
-# Store 1000 messages from a topic to a directory
-kscribe store orders --bootstrap-servers kafka:9092 --count 1000 --to-dir ./orders_data
+# Run tests
+cargo test
 
-# Analyze with standard tools
-grep -r "error" ./orders_data/
-cat ./orders_data/*.json | jq -r '.payload.product_id' | sort | uniq -c
+# Check CLI help (currently shows placeholder commands)
+cargo run -- --help
 
-# Replay messages to another topic
-kscribe replay --from-dir ./orders_data/ --to-topic orders-test --bootstrap-servers kafka:9092
+# View available subcommands
+cargo run -- store --help
+cargo run -- replay --help
+cargo run -- stats --help
 ```
 
 ## Documentation
 
-For detailed documentation, see the [Design Document](docs/design-document.md).
+- [Design Document](docs/design-document.md) - Complete technical specification
+- [Architecture Decisions](docs/ARCHITECTURE_DECISIONS.md) - Key design choices
+- [Implementation Guide](docs/IMPLEMENTATION_GUIDE.md) - Development guidelines
+- [Task List](kafka_scribe_task_list.md) - Current development progress
+
+## Contributing
+
+This project follows the task-driven development approach outlined in the task list. See `kafka_scribe_task_list.md` for current priorities and implementation status.
 
 ## License
 
