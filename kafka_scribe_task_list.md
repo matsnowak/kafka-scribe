@@ -92,7 +92,7 @@
 ### Task 7
 - **ID:** 7
 - **Title:** Implement file-based StorageBackend
-- **Status:** TODO  
+- **Status:** COMPLETED
 - **Priority:** CRITICAL
 - **Description:** Create a file-based storage backend for JSON messages (MVP implementation).
 - **Acceptance Criteria:**
@@ -102,7 +102,7 @@
   - Includes appropriate error handling and recovery
   - Comprehensive test coverage
 - **Dependencies:** 5
-- **Notes:** Focus on JSON format only for MVP. Consider using async file I/O for performance.
+- **Notes:** COMPLETED: Implemented two file-based storage backends: (1) DirectoryStorage that stores each message in a separate file in a directory structure organized by topic and partition, and (2) SingleFileStorage that stores all messages in a single file with one message per line. Both implementations handle concurrent writes efficiently using tokio's async I/O and mutexes, track storage statistics including message count, size, timestamps, topics, and partitions, and include comprehensive tests and documentation. Updated mod.rs to re-export the implementations for easier access.
 
 ### Task 8
 - **ID:** 8
