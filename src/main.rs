@@ -1,22 +1,19 @@
 mod cli;
 mod core;
 mod kafka;
+mod plugins;
 mod storage;
 mod utils;
-mod plugins;
 
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
 use tracing::Level;
-use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     // Parse command line arguments
     let cli = Cli::parse();

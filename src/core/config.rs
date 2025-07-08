@@ -61,7 +61,11 @@ impl Config {
             match Self::load_from_file(&config_path) {
                 Ok(config) => config,
                 Err(e) => {
-                    eprintln!("Warning: Failed to load config from {}: {}", config_path.display(), e);
+                    eprintln!(
+                        "Warning: Failed to load config from {}: {}",
+                        config_path.display(),
+                        e
+                    );
                     Self::default()
                 }
             }
@@ -81,8 +85,11 @@ mod tests {
         let config = Config::default();
         let yaml = serde_yaml::to_string(&config).unwrap();
         let deserialized: Config = serde_yaml::from_str(&yaml).unwrap();
-        
-        assert_eq!(config.default_bootstrap_servers, deserialized.default_bootstrap_servers);
+
+        assert_eq!(
+            config.default_bootstrap_servers,
+            deserialized.default_bootstrap_servers
+        );
         assert_eq!(config.default_batch_size, deserialized.default_batch_size);
     }
 
@@ -90,11 +97,14 @@ mod tests {
     fn test_config_file_operations() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("test_config.yaml");
-        
+
         let config = Config::default();
         config.save_to_file(&config_path).unwrap();
-        
+
         let loaded_config = Config::load_from_file(&config_path).unwrap();
-        assert_eq!(config.default_bootstrap_servers, loaded_config.default_bootstrap_servers);
+        assert_eq!(
+            config.default_bootstrap_servers,
+            loaded_config.default_bootstrap_servers
+        );
     }
 }

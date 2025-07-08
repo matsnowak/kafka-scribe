@@ -1,6 +1,6 @@
+use crate::core::errors::{FormatError, FormatResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::core::errors::{FormatError, FormatResult};
 
 /// Represents a Kafka message with all its metadata
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub struct KafkaMessage {
 
 /// Module for serializing and deserializing optional binary data
 mod serde_bytes_opt {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+    use serde::{de::Error, Deserialize, Deserializer, Serializer};
     use std::fmt;
 
     pub fn serialize<S>(bytes: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
@@ -240,11 +240,9 @@ impl KafkaMessage {
     ///
     /// Option containing the key as a hex string, or None if the key doesn't exist
     pub fn key_as_hex(&self) -> Option<String> {
-        self.key.as_ref().map(|k| {
-            k.iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-        })
+        self.key
+            .as_ref()
+            .map(|k| k.iter().map(|b| format!("{:02x}", b)).collect::<String>())
     }
 
     /// Get a hexadecimal representation of the value, if it exists
@@ -253,16 +251,14 @@ impl KafkaMessage {
     ///
     /// Option containing the value as a hex string, or None if the value doesn't exist
     pub fn value_as_hex(&self) -> Option<String> {
-        self.value.as_ref().map(|v| {
-            v.iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-        })
+        self.value
+            .as_ref()
+            .map(|v| v.iter().map(|b| format!("{:02x}", b)).collect::<String>())
     }
 }
 
 /// Statistics about a message store
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StorageStats {
     /// Total number of messages
     pub message_count: u64,
@@ -276,19 +272,6 @@ pub struct StorageStats {
     pub partition_count: u32,
     /// Number of unique topics
     pub topic_count: u32,
-}
-
-impl Default for StorageStats {
-    fn default() -> Self {
-        Self {
-            message_count: 0,
-            total_size: 0,
-            earliest_timestamp: None,
-            latest_timestamp: None,
-            partition_count: 0,
-            topic_count: 0,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -324,7 +307,10 @@ mod tests {
         .with_header("correlation-id", "abc123")
         .with_timestamp(1640995200000);
 
-        assert_eq!(msg.headers.get("correlation-id"), Some(&"abc123".to_string()));
+        assert_eq!(
+            msg.headers.get("correlation-id"),
+            Some(&"abc123".to_string())
+        );
         assert_eq!(msg.timestamp, Some(1640995200000));
     }
 

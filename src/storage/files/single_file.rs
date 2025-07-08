@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use async_trait::async_trait;
 use serde_json::to_string;
 use tokio::fs;
-use tokio::io::{AsyncWriteExt, self};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::core::errors::{StorageError, StorageResult};
@@ -116,7 +116,9 @@ impl SingleFileStorage {
         // Update timestamps
         if let Some(timestamp) = message.timestamp {
             match stats.earliest_timestamp {
-                Some(earliest) if timestamp < earliest => stats.earliest_timestamp = Some(timestamp),
+                Some(earliest) if timestamp < earliest => {
+                    stats.earliest_timestamp = Some(timestamp)
+                }
                 None => stats.earliest_timestamp = Some(timestamp),
                 _ => {}
             }
@@ -137,7 +139,9 @@ impl SingleFileStorage {
 
         // Update partitions map
         let mut partitions = self.partitions.lock().unwrap();
-        let topic_partitions = partitions.entry(message.topic.clone()).or_insert_with(HashSet::new);
+        let topic_partitions = partitions
+            .entry(message.topic.clone())
+            .or_default();
         topic_partitions.insert(message.partition);
 
         // Update stats with new counts
@@ -172,18 +176,30 @@ impl StorageBackend for SingleFileStorage {
             .open(&self.config.file_path)
             .await
             .map_err(|e| {
-                StorageError::StoreFailed(format!("Failed to open file {}: {}", self.config.file_path.display(), e))
+                StorageError::StoreFailed(format!(
+                    "Failed to open file {}: {}",
+                    self.config.file_path.display(),
+                    e
+                ))
             })?;
 
         // Write the message to the file
         file.write_all(json.as_bytes()).await.map_err(|e| {
-            StorageError::StoreFailed(format!("Failed to write to file {}: {}", self.config.file_path.display(), e))
+            StorageError::StoreFailed(format!(
+                "Failed to write to file {}: {}",
+                self.config.file_path.display(),
+                e
+            ))
         })?;
 
         // Append a newline if configured
         if self.config.append_newline {
             file.write_all(b"\n").await.map_err(|e| {
-                StorageError::StoreFailed(format!("Failed to write newline to file {}: {}", self.config.file_path.display(), e))
+                StorageError::StoreFailed(format!(
+                    "Failed to write newline to file {}: {}",
+                    self.config.file_path.display(),
+                    e
+                ))
             })?;
         }
 
@@ -201,7 +217,7 @@ impl StorageBackend for SingleFileStorage {
         }
 
         // Serialize all messages to JSON
-        let mut total_size = 0;
+        let mut _total_size = 0;
         let json_messages: Vec<String> = messages
             .iter()
             .map(|message| {
@@ -226,25 +242,37 @@ impl StorageBackend for SingleFileStorage {
             .open(&self.config.file_path)
             .await
             .map_err(|e| {
-                StorageError::StoreFailed(format!("Failed to open file {}: {}", self.config.file_path.display(), e))
+                StorageError::StoreFailed(format!(
+                    "Failed to open file {}: {}",
+                    self.config.file_path.display(),
+                    e
+                ))
             })?;
 
         // Write all messages to the file
         for (i, json) in json_messages.iter().enumerate() {
             file.write_all(json.as_bytes()).await.map_err(|e| {
-                StorageError::StoreFailed(format!("Failed to write to file {}: {}", self.config.file_path.display(), e))
+                StorageError::StoreFailed(format!(
+                    "Failed to write to file {}: {}",
+                    self.config.file_path.display(),
+                    e
+                ))
             })?;
 
             // Append a newline if configured
             if self.config.append_newline {
                 file.write_all(b"\n").await.map_err(|e| {
-                    StorageError::StoreFailed(format!("Failed to write newline to file {}: {}", self.config.file_path.display(), e))
+                    StorageError::StoreFailed(format!(
+                        "Failed to write newline to file {}: {}",
+                        self.config.file_path.display(),
+                        e
+                    ))
                 })?;
             }
 
             // Update statistics for each message
             let size = json.len() as u64 + if self.config.append_newline { 1 } else { 0 };
-            total_size += size;
+            _total_size += size;
             self.update_stats(&messages[i], size);
         }
 
@@ -263,11 +291,19 @@ impl StorageBackend for SingleFileStorage {
             .open(&self.config.file_path)
             .await
             .map_err(|e| {
-                StorageError::FlushFailed(format!("Failed to open file {}: {}", self.config.file_path.display(), e))
+                StorageError::FlushFailed(format!(
+                    "Failed to open file {}: {}",
+                    self.config.file_path.display(),
+                    e
+                ))
             })?;
 
         file.sync_all().await.map_err(|e| {
-            StorageError::FlushFailed(format!("Failed to flush file {}: {}", self.config.file_path.display(), e))
+            StorageError::FlushFailed(format!(
+                "Failed to flush file {}: {}",
+                self.config.file_path.display(),
+                e
+            ))
         })?;
 
         Ok(())
@@ -284,16 +320,26 @@ impl StorageBackend for SingleFileStorage {
         if let Some(parent) = self.config.file_path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).await.map_err(|e| {
-                    StorageError::InitializationFailed(format!("Failed to create directory {}: {}", parent.display(), e))
+                    StorageError::InitializationFailed(format!(
+                        "Failed to create directory {}: {}",
+                        parent.display(),
+                        e
+                    ))
                 })?;
             }
         }
 
         // Create the file if it doesn't exist and create_if_missing is true
         if self.config.create_if_missing && !self.config.file_path.exists() {
-            fs::File::create(&self.config.file_path).await.map_err(|e| {
-                StorageError::InitializationFailed(format!("Failed to create file {}: {}", self.config.file_path.display(), e))
-            })?;
+            fs::File::create(&self.config.file_path)
+                .await
+                .map_err(|e| {
+                    StorageError::InitializationFailed(format!(
+                        "Failed to create file {}: {}",
+                        self.config.file_path.display(),
+                        e
+                    ))
+                })?;
         } else if !self.config.file_path.exists() {
             return Err(StorageError::InitializationFailed(format!(
                 "File {} does not exist",
@@ -354,7 +400,8 @@ mod tests {
             "test-topic".to_string(),
             0,
             123,
-        ).with_timestamp(1640995200000);
+        )
+        .with_timestamp(1640995200000);
 
         // Store the message
         assert!(storage.store_message(message.clone()).await.is_ok());
@@ -396,21 +443,24 @@ mod tests {
                 "topic1".to_string(),
                 0,
                 1,
-            ).with_timestamp(1640995200000),
+            )
+            .with_timestamp(1640995200000),
             KafkaMessage::new(
                 Some(b"key2".to_vec()),
                 Some(b"value2".to_vec()),
                 "topic1".to_string(),
                 1,
                 2,
-            ).with_timestamp(1640995300000),
+            )
+            .with_timestamp(1640995300000),
             KafkaMessage::new(
                 Some(b"key3".to_vec()),
                 Some(b"value3".to_vec()),
                 "topic2".to_string(),
                 0,
                 3,
-            ).with_timestamp(1640995400000),
+            )
+            .with_timestamp(1640995400000),
         ];
 
         // Store messages individually
@@ -461,21 +511,24 @@ mod tests {
                 "topic1".to_string(),
                 0,
                 1,
-            ).with_timestamp(1640995200000),
+            )
+            .with_timestamp(1640995200000),
             KafkaMessage::new(
                 Some(b"key2".to_vec()),
                 Some(b"value2".to_vec()),
                 "topic1".to_string(),
                 1,
                 2,
-            ).with_timestamp(1640995300000),
+            )
+            .with_timestamp(1640995300000),
             KafkaMessage::new(
                 Some(b"key3".to_vec()),
                 Some(b"value3".to_vec()),
                 "topic2".to_string(),
                 0,
                 3,
-            ).with_timestamp(1640995400000),
+            )
+            .with_timestamp(1640995400000),
         ];
 
         // Store messages in batch
@@ -530,13 +583,14 @@ mod tests {
 
         // Check the content of the file
         let content = fs::read_to_string(temp_file.path()).unwrap();
-        
+
         // The pretty-printed JSON should contain newlines within the JSON itself
         assert!(content.contains("\n  "));
-        
+
         // Parse the content and check against original message
         let content_without_trailing_newline = content.trim_end();
-        let stored_message: KafkaMessage = serde_json::from_str(content_without_trailing_newline).unwrap();
+        let stored_message: KafkaMessage =
+            serde_json::from_str(content_without_trailing_newline).unwrap();
         assert_eq!(stored_message, message);
     }
 }

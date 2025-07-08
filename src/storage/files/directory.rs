@@ -127,7 +127,9 @@ impl DirectoryStorage {
         // Update timestamps
         if let Some(timestamp) = message.timestamp {
             match stats.earliest_timestamp {
-                Some(earliest) if timestamp < earliest => stats.earliest_timestamp = Some(timestamp),
+                Some(earliest) if timestamp < earliest => {
+                    stats.earliest_timestamp = Some(timestamp)
+                }
                 None => stats.earliest_timestamp = Some(timestamp),
                 _ => {}
             }
@@ -148,7 +150,9 @@ impl DirectoryStorage {
 
         // Update partitions map
         let mut partitions = self.partitions.lock().unwrap();
-        let topic_partitions = partitions.entry(message.topic.clone()).or_insert_with(HashSet::new);
+        let topic_partitions = partitions
+            .entry(message.topic.clone())
+            .or_default();
         topic_partitions.insert(message.partition);
 
         // Update stats with new counts
@@ -168,7 +172,11 @@ impl StorageBackend for DirectoryStorage {
         // Create parent directories if they don't exist
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await.map_err(|e| {
-                StorageError::StoreFailed(format!("Failed to create directory {}: {}", parent.display(), e))
+                StorageError::StoreFailed(format!(
+                    "Failed to create directory {}: {}",
+                    parent.display(),
+                    e
+                ))
             })?;
         }
 
@@ -207,13 +215,15 @@ impl StorageBackend for DirectoryStorage {
     async fn initialize(&self) -> StorageResult<()> {
         // Create the base directory if it doesn't exist and create_if_missing is true
         if self.config.create_if_missing && !self.config.base_dir.exists() {
-            fs::create_dir_all(&self.config.base_dir).await.map_err(|e| {
-                StorageError::InitializationFailed(format!(
-                    "Failed to create base directory {}: {}",
-                    self.config.base_dir.display(),
-                    e
-                ))
-            })?;
+            fs::create_dir_all(&self.config.base_dir)
+                .await
+                .map_err(|e| {
+                    StorageError::InitializationFailed(format!(
+                        "Failed to create base directory {}: {}",
+                        self.config.base_dir.display(),
+                        e
+                    ))
+                })?;
         } else if !self.config.base_dir.exists() {
             return Err(StorageError::InitializationFailed(format!(
                 "Base directory {} does not exist",
@@ -277,13 +287,15 @@ mod tests {
             "test-topic".to_string(),
             0,
             123,
-        ).with_timestamp(1640995200000);
+        )
+        .with_timestamp(1640995200000);
 
         // Store the message
         assert!(storage.store_message(message.clone()).await.is_ok());
 
         // Check that the file was created
-        let expected_path = temp_dir.path()
+        let expected_path = temp_dir
+            .path()
             .join("test-topic")
             .join("partition-0")
             .join("123.json");
@@ -325,21 +337,24 @@ mod tests {
                 "topic1".to_string(),
                 0,
                 1,
-            ).with_timestamp(1640995200000),
+            )
+            .with_timestamp(1640995200000),
             KafkaMessage::new(
                 Some(b"key2".to_vec()),
                 Some(b"value2".to_vec()),
                 "topic1".to_string(),
                 1,
                 2,
-            ).with_timestamp(1640995300000),
+            )
+            .with_timestamp(1640995300000),
             KafkaMessage::new(
                 Some(b"key3".to_vec()),
                 Some(b"value3".to_vec()),
                 "topic2".to_string(),
                 0,
                 3,
-            ).with_timestamp(1640995400000),
+            )
+            .with_timestamp(1640995400000),
         ];
 
         for message in &messages {
@@ -347,9 +362,24 @@ mod tests {
         }
 
         // Check that all files were created
-        assert!(temp_dir.path().join("topic1").join("partition-0").join("1.json").exists());
-        assert!(temp_dir.path().join("topic1").join("partition-1").join("2.json").exists());
-        assert!(temp_dir.path().join("topic2").join("partition-0").join("3.json").exists());
+        assert!(temp_dir
+            .path()
+            .join("topic1")
+            .join("partition-0")
+            .join("1.json")
+            .exists());
+        assert!(temp_dir
+            .path()
+            .join("topic1")
+            .join("partition-1")
+            .join("2.json")
+            .exists());
+        assert!(temp_dir
+            .path()
+            .join("topic2")
+            .join("partition-0")
+            .join("3.json")
+            .exists());
 
         // Check the statistics
         let stats = storage.get_stats();

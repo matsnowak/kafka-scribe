@@ -1,4 +1,4 @@
-pub mod store;
+pub mod completion;
 pub mod replay;
 pub mod stats;
-pub mod completion;
+pub mod store;

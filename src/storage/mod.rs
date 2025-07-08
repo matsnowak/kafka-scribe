@@ -1,10 +1,10 @@
-pub mod files;
 #[cfg(feature = "database")]
 pub mod database;
+pub mod files;
 pub mod transform;
 
+use crate::core::{errors::StorageResult, models::KafkaMessage, models::StorageStats};
 use async_trait::async_trait;
-use crate::core::{models::KafkaMessage, models::StorageStats, errors::StorageResult};
 
 /// Trait for storage backends
 ///
@@ -207,8 +207,8 @@ pub trait StorageBackend: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use crate::core::errors::StorageError;
+    use std::sync::{Arc, Mutex};
 
     // Mock implementation of StorageBackend for testing
     struct MockStorage {
@@ -235,7 +235,9 @@ mod tests {
     impl StorageBackend for MockStorage {
         async fn store_message(&self, message: KafkaMessage) -> StorageResult<()> {
             if self.should_fail {
-                return Err(StorageError::StoreFailed("Mock storage failure".to_string()));
+                return Err(StorageError::StoreFailed(
+                    "Mock storage failure".to_string(),
+                ));
             }
 
             let mut messages = self.messages.lock().unwrap();
@@ -245,7 +247,9 @@ mod tests {
 
         async fn store_messages(&self, messages: &[KafkaMessage]) -> StorageResult<()> {
             if self.should_fail {
-                return Err(StorageError::StoreFailed("Mock batch storage failure".to_string()));
+                return Err(StorageError::StoreFailed(
+                    "Mock batch storage failure".to_string(),
+                ));
             }
 
             let mut storage_messages = self.messages.lock().unwrap();
@@ -265,22 +269,25 @@ mod tests {
 
         fn get_stats(&self) -> StorageStats {
             let messages = self.messages.lock().unwrap();
-            let mut stats = StorageStats::default();
-            stats.message_count = messages.len() as u64;
+            let mut stats = StorageStats {
+                message_count: messages.len() as u64,
+                ..Default::default()
+            };
 
             // Calculate total size (approximate)
-            let total_size: u64 = messages.iter().map(|m| {
-                let key_size = m.key.as_ref().map_or(0, |k| k.len() as u64);
-                let value_size = m.value.as_ref().map_or(0, |v| v.len() as u64);
-                key_size + value_size
-            }).sum();
+            let total_size: u64 = messages
+                .iter()
+                .map(|m| {
+                    let key_size = m.key.as_ref().map_or(0, |k| k.len() as u64);
+                    let value_size = m.value.as_ref().map_or(0, |v| v.len() as u64);
+                    key_size + value_size
+                })
+                .sum();
             stats.total_size = total_size;
 
             // Set timestamps if there are messages
             if !messages.is_empty() {
-                let timestamps: Vec<i64> = messages.iter()
-                    .filter_map(|m| m.timestamp)
-                    .collect();
+                let timestamps: Vec<i64> = messages.iter().filter_map(|m| m.timestamp).collect();
 
                 if !timestamps.is_empty() {
                     stats.earliest_timestamp = timestamps.iter().min().cloned();
@@ -305,7 +312,9 @@ mod tests {
 
         async fn initialize(&self) -> StorageResult<()> {
             if self.should_fail {
-                return Err(StorageError::InitializationFailed("Mock initialization failure".to_string()));
+                return Err(StorageError::InitializationFailed(
+                    "Mock initialization failure".to_string(),
+                ));
             }
 
             let mut initialized = self.initialized.lock().unwrap();
@@ -339,17 +348,19 @@ mod tests {
             "test-topic".to_string(),
             0,
             100,
-        ).with_timestamp(1625482800000);
+        )
+        .with_timestamp(1625482800000);
 
         assert!(storage.store_message(message.clone()).await.is_ok());
 
         // Test that the message was stored
-        let messages = storage.messages.lock().unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0], message);
+        {
+            let messages = storage.messages.lock().unwrap();
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0], message);
+        }
 
         // Test flushing
-        drop(messages); // Release the lock
         assert!(storage.flush().await.is_ok());
         assert!(*storage.flushed.lock().unwrap());
 
@@ -407,21 +418,24 @@ mod tests {
                 "test-topic".to_string(),
                 0,
                 100,
-            ).with_timestamp(1625482800000),
+            )
+            .with_timestamp(1625482800000),
             KafkaMessage::new(
                 Some(b"key2".to_vec()),
                 Some(b"value2".to_vec()),
                 "test-topic".to_string(),
                 0,
                 101,
-            ).with_timestamp(1625482800001),
+            )
+            .with_timestamp(1625482800001),
             KafkaMessage::new(
                 Some(b"key3".to_vec()),
                 Some(b"value3".to_vec()),
                 "test-topic".to_string(),
                 1,
                 102,
-            ).with_timestamp(1625482800002),
+            )
+            .with_timestamp(1625482800002),
         ];
 
         // Store messages in batch
