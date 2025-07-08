@@ -1,4 +1,4 @@
-```````````````````# CLAUDE.md
+# Project guidelines 
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -171,5 +171,3 @@ The project is in **Phase 1: Foundation** with these immediate priorities:
 - Task #15: Kafka consumer integration
 - Task #17: Store command implementation
 
-
-```````````````````
