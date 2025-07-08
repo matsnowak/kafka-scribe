@@ -48,7 +48,7 @@
 ### Task 4
 - **ID:** 4
 - **Title:** Define KafkaMessage type
-- **Status:** TODO
+- **Status:** COMPLETED
 - **Priority:** HIGH
 - **Description:** Create the core data structure to represent Kafka messages, including key, value, headers, partition, offset, and timestamp.
 - **Acceptance Criteria:**
@@ -57,7 +57,7 @@
   - Includes appropriate error handling
   - Has comprehensive test coverage
 - **Dependencies:** 1
-- **Notes:** Consider using serde for serialization support.
+- **Notes:** COMPLETED: Implemented KafkaMessage with Vec<u8> for key and value to support binary data. Added serialization/deserialization with serde, proper error handling with FormatError types, and helper methods for string conversion and hex encoding. Comprehensive test coverage includes creation, headers, timestamps, serialization/deserialization, string conversion, and hex encoding.
 
 ### Task 5
 - **ID:** 5
