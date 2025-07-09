@@ -115,9 +115,18 @@ impl MessageFormat for JsonFormat {
         if let Value::Object(schema_obj) = &schema_value {
             if let Some(Value::Object(required)) = schema_obj.get("required") {
                 if let Value::Object(message_obj) = &message_value {
-                    for (key, _) in required {
-                        if !message_obj.contains_key(key) {
+                    for (key, value) in required {
+                        // Check if the required field exists and is not null
+                        if !message_obj.contains_key(key) || message_obj[key].is_null() {
                             return Err(FormatError::Schema(format!("Required field '{}' missing in message", key)));
+                        }
+
+                        // If the value in the required object is a boolean and true,
+                        // it means the field must exist and not be null
+                        if value.is_boolean() && value.as_bool().unwrap() {
+                            if !message_obj.contains_key(key) || message_obj[key].is_null() {
+                                return Err(FormatError::Schema(format!("Required field '{}' missing in message", key)));
+                            }
                         }
                     }
                 }
@@ -142,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn test_json_format_specific() {
         let format = JsonFormat::new();
-        
+
         // Test with a message containing various data types
         let message = KafkaMessage::new(
             Some(b"binary-key".to_vec()),
@@ -161,11 +170,11 @@ mod tests {
         )
         .with_header("content-type", "application/json")
         .with_timestamp(1640995200000);
-        
+
         // Serialize and deserialize
         let serialized = format.serialize(&message).await.unwrap();
         let deserialized = format.deserialize(&serialized).await.unwrap();
-        
+
         // Verify the result matches the original
         assert_eq!(message, deserialized);
     }
@@ -173,11 +182,11 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_json() {
         let format = JsonFormat::new();
-        
+
         // Test with invalid JSON
         let invalid_json = b"{not valid json}";
         let result = format.deserialize(invalid_json).await;
-        
+
         // Verify the error
         assert!(result.is_err());
         if let Err(FormatError::InvalidFormat(msg)) = result {
@@ -190,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn test_schema_validation() {
         let format = JsonFormat::new();
-        
+
         // Create a test message
         let message = KafkaMessage::new(
             Some(b"key".to_vec()),
@@ -199,19 +208,19 @@ mod tests {
             0,
             100,
         );
-        
+
         // Define a simple schema that requires a "timestamp" field
         let schema = r#"{"required": {"timestamp": true}}"#;
-        
+
         // Validation should fail because the message doesn't have a timestamp
         let result = format.validate_schema(&message, schema).await;
         assert!(result.is_err());
-        
+
         // Add a timestamp and try again
         let message_with_timestamp = message.clone().with_timestamp(1640995200000);
         let result = format.validate_schema(&message_with_timestamp, schema).await;
         assert!(result.is_ok());
-        
+
         // Test with invalid schema
         let invalid_schema = r#"{not a valid schema}"#;
         let result = format.validate_schema(&message, invalid_schema).await;
