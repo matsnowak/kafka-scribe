@@ -41,6 +41,10 @@ async-trait = "0.1"
 # Configuration
 dirs = "5.0"
 
+# Utilities
+regex = "1.10"
+uuid = { version = "1.6", features = ["v4"] }
+
 # UI/UX
 indicatif = "0.17"
 dialoguer = "0.11"

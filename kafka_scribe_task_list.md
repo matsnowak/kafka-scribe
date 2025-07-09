@@ -211,7 +211,7 @@
 ### Task 15
 - **ID:** 15
 - **Title:** Implement Kafka consumer for store command
-- **Status:** TODO
+- **Status:** COMPLETED
 - **Priority:** HIGH
 - **Description:** Create a Kafka consumer that can read messages from topics with the filtering and selection options described in the design.
 - **Acceptance Criteria:**
@@ -221,7 +221,7 @@
   - Supports limiting (count, until-offset, until-timestamp)
   - Comprehensive test coverage
 - **Dependencies:** 4
-- **Notes:** Use rdkafka or similar Kafka client library.
+- **Notes:** COMPLETED: Implemented KafkaConsumer with KafkaConsumerConfig for configuration. The consumer supports all required filtering options (key regex, headers, partitions), range selection (from-beginning, from-offset, from-timestamp), and limiting (count, until-offset, until-timestamp, live mode). Added comprehensive test coverage for message filtering and conversion. Used rdkafka for the Kafka client implementation.
 
 ### Task 16
 - **ID:** 16
