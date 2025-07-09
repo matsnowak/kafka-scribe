@@ -141,7 +141,7 @@
 ### Task 10
 - **ID:** 10
 - **Title:** Implement JSON message format
-- **Status:** TODO
+- **Status:** COMPLETED
 - **Priority:** HIGH
 - **Description:** Create a message format handler for JSON-formatted messages.
 - **Acceptance Criteria:**
@@ -150,7 +150,7 @@
   - Provides meaningful error messages for invalid JSON
   - Comprehensive test coverage
 - **Dependencies:** 6
-- **Notes:** Use serde_json for implementation.
+- **Notes:** COMPLETED: Implemented JsonFormat that implements the MessageFormat trait for JSON-formatted messages. Used serde_json for serialization and deserialization with comprehensive error handling. Added schema validation functionality that checks for required fields. Included thorough documentation with examples and comprehensive test coverage, including tests for serialization/deserialization, schema validation, and error handling for invalid JSON.
 
 ### Task 11
 - **ID:** 11

@@ -273,3 +273,89 @@ mod tests {
         assert_eq!(messages, deserialized);
     }
 }
+
+#[cfg(test)]
+pub mod test_utils {
+    use crate::core::errors::FormatResult;
+    use crate::core::models::KafkaMessage;
+    use crate::core::format::MessageFormat;
+    use std::fmt::Debug;
+
+    // Generic test suite for any MessageFormat implementation
+    pub async fn test_message_format_implementation<T>(format: T) 
+    where 
+        T: MessageFormat + Debug
+    {
+        // Test basic serialization/deserialization
+        test_serialization_roundtrip(&format).await;
+        
+        // Test batch operations
+        test_batch_operations(&format).await;
+        
+        // Test error handling
+        test_error_handling(&format).await;
+        
+        // Test format name is non-empty
+        assert!(!format.format_name().is_empty(), 
+            "Format name should not be empty");
+    }
+
+    async fn test_serialization_roundtrip<T: MessageFormat + Debug>(format: &T) {
+        // Create a test message
+        let message = KafkaMessage::new(
+            Some(b"test-key".to_vec()),
+            Some(b"test-value".to_vec()),
+            "test-topic".to_string(),
+            0,
+            100,
+        );
+        
+        // Serialize and deserialize
+        let serialized = format.serialize(&message).await.expect("Serialization failed");
+        let deserialized = format.deserialize(&serialized).await.expect("Deserialization failed");
+        
+        // Verify the result matches the original
+        assert_eq!(message, deserialized, 
+            "Message should be the same after roundtrip through {:?}", format);
+    }
+    
+    async fn test_batch_operations<T: MessageFormat + Debug>(format: &T) {
+        // Create test messages
+        let messages = vec![
+            KafkaMessage::new(
+                Some(b"key1".to_vec()),
+                Some(b"value1".to_vec()),
+                "topic".to_string(),
+                0,
+                100,
+            ),
+            KafkaMessage::new(
+                Some(b"key2".to_vec()),
+                Some(b"value2".to_vec()),
+                "topic".to_string(),
+                0,
+                101,
+            ),
+        ];
+        
+        // Batch serialize
+        let serialized = format.batch_serialize(&messages).await
+            .expect("Batch serialization failed");
+        assert_eq!(serialized.len(), 2, "Should serialize 2 messages");
+        
+        // Batch deserialize
+        let deserialized = format.batch_deserialize(&serialized).await
+            .expect("Batch deserialization failed");
+        assert_eq!(deserialized.len(), 2, "Should deserialize 2 messages");
+        assert_eq!(messages, deserialized, 
+            "Messages should be the same after batch operations through {:?}", format);
+    }
+    
+    async fn test_error_handling<T: MessageFormat + Debug>(format: &T) {
+        // Test with invalid data
+        let invalid_data = vec![1, 2, 3, 4]; // Not valid for most formats
+        let result = format.deserialize(&invalid_data).await;
+        assert!(result.is_err(), 
+            "Deserializing invalid data should fail for {:?}", format);
+    }
+}

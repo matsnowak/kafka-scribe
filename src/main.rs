@@ -1,5 +1,6 @@
 mod cli;
 mod core;
+mod formats;
 mod kafka;
 mod plugins;
 mod storage;
