@@ -93,7 +93,7 @@ kscribe store <topic> --bootstrap-servers <servers> [OPTIONS]
 #### 3.1.3 Source Range Selection
 
 * `--from-beginning`: Start from the earliest offset.
-* `--from-offset <offset>`: Start from a specific offset.
+* `--from-offsets <partition=offset,...>`: Start from specific offsets for each partition.
 * `--from-timestamp <timestamp>`: Start from a specific time.
 * `--count <n>`: Capture exactly `n` messages.
 * `--until-offset <offset>`: Capture until a specific offset is reached.

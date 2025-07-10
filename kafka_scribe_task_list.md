@@ -517,6 +517,21 @@
 - **Dependencies:** 5
 - **Notes:** This is an enhancement from the improvement plan.
 
+### Task 36
+- **ID:** 36
+- **Title:** Enhance CLI to support partition-specific offsets
+- **Status:** COMPLETED
+- **Priority:** MEDIUM
+- **Description:** Modify the tool to improve how it handles Kafka's partition-specific offsets by replacing the single `from_offset` parameter with a more flexible `from_offsets` parameter that allows users to specify different offsets for different partitions.
+- **Acceptance Criteria:**
+  - Replace `from_offset` with `from_offsets` parameter in `StoreCommand` ✓
+  - Update command examples in documentation ✓
+  - Add helper method to parse partition-offset mappings ✓
+  - Update design document to reflect changes ✓
+  - Add tests for the new functionality ✓
+- **Dependencies:** 3, 15
+- **Notes:** This enhancement provides more flexibility for users working with Kafka topics that have multiple partitions, allowing them to start consuming from specific offsets for each partition.
+
 # Instructions for AI Coding Agents
 
 ## Interpreting the tasks.md Document

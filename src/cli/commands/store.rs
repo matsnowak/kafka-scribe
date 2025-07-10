@@ -1,4 +1,5 @@
 use clap::Args;
+use std::collections::HashMap;
 
 /// Store messages from a Kafka topic to a storage destination
 ///
@@ -9,6 +10,9 @@ use clap::Args;
 ///
 /// # Store all messages for a specific user from the 'user-events' topic into a file
 /// $ kscribe store user-events --bootstrap-servers kafka-prod:9092 --key-regex "user-123" --from-beginning --to-file ./user-events.json
+///
+/// # Store messages from the 'orders' topic starting from specific offsets
+/// $ kscribe store orders --bootstrap-servers kafka-prod:9092 --from-offsets 0=1000,1=500 --to-file ./orders.json
 #[derive(Args)]
 pub struct StoreCommand {
     /// Topic name to store messages from
@@ -44,9 +48,9 @@ pub struct StoreCommand {
     #[arg(long, group = "start_position")]
     pub from_beginning: bool,
 
-    /// Start from a specific offset
-    #[arg(long, value_name = "OFFSET", group = "start_position")]
-    pub from_offset: Option<u64>,
+    /// Start from specific offsets (format: partition=offset,partition=offset,...)
+    #[arg(long, value_name = "PARTITION=OFFSET", group = "start_position")]
+    pub from_offsets: Option<Vec<String>>,
 
     /// Start from a specific timestamp (milliseconds since epoch)
     #[arg(long, value_name = "TIMESTAMP", group = "start_position")]
@@ -113,9 +117,292 @@ pub struct StoreCommand {
 }
 
 impl StoreCommand {
+    // Parse from_offsets strings (format: "partition=offset") into a HashMap
+    fn parse_from_offsets(&self) -> anyhow::Result<HashMap<i32, u64>> {
+        let mut offsets = HashMap::new();
+
+        if let Some(offset_strings) = &self.from_offsets {
+            for offset_str in offset_strings {
+                // Split by the equals sign
+                let parts: Vec<&str> = offset_str.split('=').collect();
+                if parts.len() != 2 {
+                    return Err(anyhow::anyhow!("Invalid format for --from-offsets. Expected 'partition=offset', got '{}'", offset_str));
+                }
+
+                // Parse partition and offset
+                let partition = parts[0].trim().parse::<i32>()
+                    .map_err(|_| anyhow::anyhow!("Invalid partition number in --from-offsets: '{}'", parts[0]))?;
+
+                let offset = parts[1].trim().parse::<u64>()
+                    .map_err(|_| anyhow::anyhow!("Invalid offset in --from-offsets: '{}'", parts[1]))?;
+
+                offsets.insert(partition, offset);
+            }
+        }
+
+        Ok(offsets)
+    }
+
     pub async fn execute(&self) -> anyhow::Result<()> {
-        // TODO: Implement store command
+        // Parse the from_offsets parameter when needed
+        if self.from_offsets.is_some() {
+            let partition_offsets = self.parse_from_offsets()?;
+            // TODO: Use partition_offsets when configuring the Kafka consumer
+            println!("Using custom partition offsets: {:?}", partition_offsets);
+        }
+
         println!("Store command not yet implemented");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_from_offsets_valid() {
+        // Create a StoreCommand with valid from_offsets
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            from_offsets: Some(vec!["0=1000".to_string(), "1=500".to_string(), "2=750".to_string()]),
+            // Set default values for other required fields
+            to_dir: None,
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: false,
+            dry_run: false,
+        };
+
+        // Parse the from_offsets
+        let result = cmd.parse_from_offsets();
+
+        // Check that the result is Ok and contains the expected values
+        assert!(result.is_ok());
+        let offsets = result.unwrap();
+        assert_eq!(offsets.len(), 3);
+        assert_eq!(offsets.get(&0), Some(&1000));
+        assert_eq!(offsets.get(&1), Some(&500));
+        assert_eq!(offsets.get(&2), Some(&750));
+    }
+
+    #[test]
+    fn test_parse_from_offsets_invalid_format() {
+        // Create a StoreCommand with invalid from_offsets format (missing equals sign)
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            from_offsets: Some(vec!["0:1000".to_string()]), // Using colon instead of equals
+            // Set default values for other required fields
+            to_dir: None,
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: false,
+            dry_run: false,
+        };
+
+        // Parse the from_offsets
+        let result = cmd.parse_from_offsets();
+
+        // Check that the result is an error with the expected message
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid format for --from-offsets"));
+        assert!(err.contains("0:1000"));
+    }
+
+    #[test]
+    fn test_parse_from_offsets_invalid_partition() {
+        // Create a StoreCommand with invalid partition number
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            from_offsets: Some(vec!["invalid=1000".to_string()]), // Non-numeric partition
+            // Set default values for other required fields
+            to_dir: None,
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: false,
+            dry_run: false,
+        };
+
+        // Parse the from_offsets
+        let result = cmd.parse_from_offsets();
+
+        // Check that the result is an error with the expected message
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid partition number"));
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn test_parse_from_offsets_invalid_offset() {
+        // Create a StoreCommand with invalid offset value
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            from_offsets: Some(vec!["0=invalid".to_string()]), // Non-numeric offset
+            // Set default values for other required fields
+            to_dir: None,
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: false,
+            dry_run: false,
+        };
+
+        // Parse the from_offsets
+        let result = cmd.parse_from_offsets();
+
+        // Check that the result is an error with the expected message
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid offset"));
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn test_parse_from_offsets_empty() {
+        // Create a StoreCommand with empty from_offsets
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            from_offsets: Some(vec![]),
+            // Set default values for other required fields
+            to_dir: None,
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: false,
+            dry_run: false,
+        };
+
+        // Parse the from_offsets
+        let result = cmd.parse_from_offsets();
+
+        // Check that the result is Ok and contains an empty HashMap
+        assert!(result.is_ok());
+        let offsets = result.unwrap();
+        assert_eq!(offsets.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_from_offsets_none() {
+        // Create a StoreCommand with None from_offsets
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            from_offsets: None,
+            // Set default values for other required fields
+            to_dir: None,
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: false,
+            dry_run: false,
+        };
+
+        // Parse the from_offsets
+        let result = cmd.parse_from_offsets();
+
+        // Check that the result is Ok and contains an empty HashMap
+        assert!(result.is_ok());
+        let offsets = result.unwrap();
+        assert_eq!(offsets.len(), 0);
     }
 }

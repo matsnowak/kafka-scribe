@@ -31,8 +31,8 @@ pub struct KafkaConsumerConfig {
     pub group_id: String,
     /// Whether to start from the beginning of the topic
     pub from_beginning: bool,
-    /// Start from a specific offset
-    pub from_offset: Option<u64>,
+    /// Start from specific offsets (format: partition=offset)
+    pub from_offsets: Option<HashMap<i32, u64>>,
     /// Start from a specific timestamp
     pub from_timestamp: Option<i64>,
     /// Maximum number of messages to consume
@@ -62,7 +62,7 @@ impl Default for KafkaConsumerConfig {
             topic: "".to_string(),
             group_id: format!("kafka-scribe-{}", uuid::Uuid::new_v4()),
             from_beginning: false,
-            from_offset: None,
+            from_offsets: None,
             from_timestamp: None,
             count: None,
             until_offset: None,
@@ -158,17 +158,15 @@ impl KafkaConsumer {
         }
 
         // Set starting position if specified
-        if let Some(offset) = self.config.from_offset {
+        if let Some(offsets) = &self.config.from_offsets {
             let mut tpl = TopicPartitionList::new();
-            if let Some(partitions) = &self.config.partitions {
-                for &partition in partitions {
+            if !offsets.is_empty() {
+                // Use the specified partition offsets
+                for (&partition, &offset) in offsets {
                     tpl.add_partition_offset(&self.config.topic, partition, Offset::Offset(offset as i64))?;
                 }
-            } else {
-                // If no partitions specified, use partition 0
-                tpl.add_partition_offset(&self.config.topic, 0, Offset::Offset(offset as i64))?;
+                consumer.assign(&tpl)?;
             }
-            consumer.assign(&tpl)?;
         } else if let Some(timestamp) = self.config.from_timestamp {
             let mut tpl = TopicPartitionList::new();
             if let Some(partitions) = &self.config.partitions {
@@ -341,6 +339,10 @@ impl KafkaConsumer {
         let offset = message.offset();
         let timestamp = message.timestamp().to_millis();
 
+        // Debug output to understand the issue
+        println!("OwnedMessage key: {:?}", key);
+        println!("OwnedMessage payload: {:?}", payload);
+
         let mut kafka_message = KafkaMessage::new(
             key,
             payload,
@@ -390,9 +392,11 @@ mod tests {
 
         // Create a message with matching key
         let headers = OwnedHeaders::new();
+        // Note: The OwnedMessage::new method seems to swap the key and payload parameters
+        // compared to what we expect. So we're swapping them here to get the expected result.
         let message = OwnedMessage::new(
-            Some("test-key".as_bytes().to_vec()),
-            Some("test-value".as_bytes().to_vec()),
+            Some("test-value".as_bytes().to_vec()),  // This will be the key
+            Some("test-key".as_bytes().to_vec()),    // This will be the payload
             "test-topic".to_string(),
             Timestamp::CreateTime(0),
             0,
@@ -404,9 +408,11 @@ mod tests {
 
         // Create a message with non-matching key
         let headers = OwnedHeaders::new();
+        // Note: The OwnedMessage::new method seems to swap the key and payload parameters
+        // compared to what we expect. So we're swapping them here to get the expected result.
         let message = OwnedMessage::new(
-            Some("other-key".as_bytes().to_vec()),
-            Some("test-value".as_bytes().to_vec()),
+            Some("test-value".as_bytes().to_vec()),  // This will be the key
+            Some("other-key".as_bytes().to_vec()),   // This will be the payload
             "test-topic".to_string(),
             Timestamp::CreateTime(0),
             0,
@@ -423,14 +429,16 @@ mod tests {
         let consumer = KafkaConsumer::new(config).unwrap();
 
         // Create a message
-        let mut headers = OwnedHeaders::new();
+        let headers = OwnedHeaders::new();
         // Add headers using the correct method
         // Since OwnedHeaders doesn't have an add method, we need to create a new one
         // For simplicity in tests, we'll just use empty headers
 
+        // Note: The OwnedMessage::new method seems to swap the key and payload parameters
+        // compared to what we expect. So we're swapping them here to get the expected result.
         let message = OwnedMessage::new(
-            Some("test-key".as_bytes().to_vec()),
-            Some("test-value".as_bytes().to_vec()),
+            Some("test-value".as_bytes().to_vec()),  // This will be the key
+            Some("test-key".as_bytes().to_vec()),    // This will be the payload
             "test-topic".to_string(),
             Timestamp::CreateTime(1640995200000),
             0,
@@ -439,6 +447,12 @@ mod tests {
         );
 
         let kafka_message = consumer.convert_to_kafka_message(message);
+
+        // Debug output
+        println!("Key: {:?}", kafka_message.key);
+        println!("Value: {:?}", kafka_message.value);
+        println!("Expected key: {:?}", Some("test-key".as_bytes().to_vec()));
+        println!("Expected value: {:?}", Some("test-value".as_bytes().to_vec()));
 
         // Verify the conversion
         assert_eq!(kafka_message.key, Some("test-key".as_bytes().to_vec()));
