@@ -243,7 +243,7 @@
 ### Task 17
 - **ID:** 17
 - **Title:** Implement store command
-- **Status:** TODO
+- **Status:** COMPLETED
 - **Priority:** HIGH
 - **Description:** Implement the `kscribe store` command to capture messages from Kafka to a storage backend.
 - **Acceptance Criteria:**
@@ -253,7 +253,7 @@
   - Gracefully handles interruptions
   - Comprehensive test coverage
 - **Dependencies:** 3, 5, 7, 8, 9, 15
-- **Notes:** Focus on creating a reliable pipeline from Kafka to storage.
+- **Notes:** COMPLETED: Implemented the store command that integrates the Kafka consumer with storage backends. The command handles all CLI options correctly, provides real-time progress feedback, and gracefully handles interruptions with proper signal handling. Added comprehensive test coverage for various scenarios including error cases. The implementation supports both directory-based and single-file storage backends, with database storage deferred as per Task 8 and Task 9 status.
 
 ### Task 18
 - **ID:** 18
