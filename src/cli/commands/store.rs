@@ -1,5 +1,20 @@
 use clap::Args;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use tokio::signal;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tracing::{debug, error, info, warn};
+
+use crate::core::models::KafkaMessage;
+use crate::kafka::consumer::{KafkaConsumer, KafkaConsumerConfig};
+use crate::storage::files::directory::{DirectoryStorage, DirectoryStorageConfig};
+use crate::storage::files::single_file::{SingleFileStorage, SingleFileStorageConfig};
+use crate::storage::StorageBackend;
 
 /// Store messages from a Kafka topic to a storage destination
 ///
@@ -144,14 +159,233 @@ impl StoreCommand {
     }
 
     pub async fn execute(&self) -> anyhow::Result<()> {
-        // Parse the from_offsets parameter when needed
-        if self.from_offsets.is_some() {
-            let partition_offsets = self.parse_from_offsets()?;
-            // TODO: Use partition_offsets when configuring the Kafka consumer
-            println!("Using custom partition offsets: {:?}", partition_offsets);
+        // Validate that a destination is specified
+        if self.to_dir.is_none() && self.to_file.is_none() && self.to_db.is_none() {
+            return Err(anyhow::anyhow!("No destination specified. Use --to-dir, --to-file, or --to-db"));
         }
 
-        println!("Store command not yet implemented");
+        // Parse the from_offsets parameter when needed
+        let partition_offsets = if self.from_offsets.is_some() {
+            let offsets = self.parse_from_offsets()?;
+            if !self.quiet {
+                println!("Using custom partition offsets: {:?}", offsets);
+            }
+            Some(offsets)
+        } else {
+            None
+        };
+
+        // Parse headers if specified
+        let headers = if let Some(header_strings) = &self.header {
+            let mut headers_map = HashMap::new();
+            for header_str in header_strings {
+                let parts: Vec<&str> = header_str.split('=').collect();
+                if parts.len() != 2 {
+                    return Err(anyhow::anyhow!("Invalid format for --header. Expected 'key=value', got '{}'", header_str));
+                }
+                headers_map.insert(parts[0].to_string(), parts[1].to_string());
+            }
+            Some(headers_map)
+        } else {
+            None
+        };
+
+        // Configure the Kafka consumer
+        let consumer_config = KafkaConsumerConfig {
+            bootstrap_servers: self.bootstrap_servers.clone(),
+            topic: self.topic.clone(),
+            group_id: format!("kafka-scribe-{}", uuid::Uuid::new_v4()),
+            from_beginning: self.from_beginning,
+            from_offsets: partition_offsets,
+            from_timestamp: self.from_timestamp,
+            count: self.count,
+            until_offset: self.until_offset,
+            until_timestamp: self.until_timestamp,
+            live: self.live,
+            partitions: self.partitions.clone(),
+            key_regex: self.key_regex.clone(),
+            headers,
+            batch_size: self.batch_size,
+            buffer_size: self.buffer_size,
+        };
+
+        if self.verbose {
+            println!("Kafka consumer configuration:");
+            println!("  Bootstrap servers: {}", consumer_config.bootstrap_servers);
+            println!("  Topic: {}", consumer_config.topic);
+            println!("  Group ID: {}", consumer_config.group_id);
+            println!("  From beginning: {}", consumer_config.from_beginning);
+            if let Some(offsets) = &consumer_config.from_offsets {
+                println!("  From offsets: {:?}", offsets);
+            }
+            if let Some(timestamp) = consumer_config.from_timestamp {
+                println!("  From timestamp: {}", timestamp);
+            }
+            if let Some(count) = consumer_config.count {
+                println!("  Count limit: {}", count);
+            }
+            if let Some(offset) = consumer_config.until_offset {
+                println!("  Until offset: {}", offset);
+            }
+            if let Some(timestamp) = consumer_config.until_timestamp {
+                println!("  Until timestamp: {}", timestamp);
+            }
+            println!("  Live mode: {}", consumer_config.live);
+            if let Some(partitions) = &consumer_config.partitions {
+                println!("  Partitions: {:?}", partitions);
+            }
+            if let Some(regex) = &consumer_config.key_regex {
+                println!("  Key regex: {}", regex);
+            }
+            if let Some(headers) = &consumer_config.headers {
+                println!("  Headers filter: {:?}", headers);
+            }
+            println!("  Batch size: {}", consumer_config.batch_size);
+            println!("  Buffer size: {}", consumer_config.buffer_size);
+        }
+
+        // If dry run, just return
+        if self.dry_run {
+            println!("Dry run completed. No messages were stored.");
+            return Ok(());
+        }
+
+        // Create and initialize the storage backend
+        let storage: Arc<dyn StorageBackend> = if let Some(dir_path) = &self.to_dir {
+            let config = DirectoryStorageConfig {
+                base_dir: PathBuf::from(dir_path),
+                ..Default::default()
+            };
+            let storage = DirectoryStorage::new(config);
+            Arc::new(storage)
+        } else if let Some(file_path) = &self.to_file {
+            let config = SingleFileStorageConfig {
+                file_path: PathBuf::from(file_path),
+                pretty_print: self.format == "json" && self.verbose, // Pretty print JSON if verbose
+                ..Default::default()
+            };
+            let storage = SingleFileStorage::new(config);
+            Arc::new(storage)
+        } else if let Some(_db_conn) = &self.to_db {
+            // Database storage is not implemented yet
+            return Err(anyhow::anyhow!("Database storage is not implemented yet"));
+        } else {
+            unreachable!("Destination validation should have caught this");
+        };
+
+        // Initialize the storage
+        storage.initialize().await.context("Failed to initialize storage")?;
+
+        // Create a channel for messages
+        let (tx, mut rx) = mpsc::channel::<KafkaMessage>(self.buffer_size as usize);
+
+        // Create and initialize the Kafka consumer
+        let mut consumer = KafkaConsumer::new(consumer_config).context("Failed to create Kafka consumer")?;
+        consumer.initialize().await.context("Failed to initialize Kafka consumer")?;
+
+        // Start the consumer in a separate task
+        let consumer_handle = tokio::spawn(async move {
+            if let Err(e) = consumer.consume_messages(tx).await {
+                error!("Error consuming messages: {:?}", e);
+                return Err(e);
+            }
+            Ok(consumer.message_count())
+        });
+
+        // Set up signal handling for graceful shutdown
+        let mut ctrl_c = tokio::spawn(async {
+            signal::ctrl_c().await.expect("Failed to listen for ctrl-c signal");
+        });
+
+        let mut term_signal = tokio::spawn(async {
+            signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to listen for terminate signal")
+                .recv()
+                .await;
+        });
+
+        // Process messages from the channel
+        let start_time = Instant::now();
+        let mut message_count = 0;
+        let mut last_update = Instant::now();
+        let update_interval = Duration::from_secs(1); // Update progress every second
+
+        loop {
+            tokio::select! {
+                // Check for signals
+                _ = &mut ctrl_c => {
+                    if !self.quiet {
+                        println!("\nReceived interrupt signal, shutting down gracefully...");
+                    }
+                    break;
+                }
+                _ = &mut term_signal => {
+                    if !self.quiet {
+                        println!("\nReceived termination signal, shutting down gracefully...");
+                    }
+                    break;
+                }
+                // Process messages
+                Some(message) = rx.recv() => {
+                    // Store the message
+                    if let Err(e) = storage.store_message(message).await {
+                        error!("Failed to store message: {:?}", e);
+                        // Continue processing other messages
+                    }
+
+                    message_count += 1;
+
+                    // Update progress periodically
+                    if !self.quiet && last_update.elapsed() >= update_interval {
+                        let elapsed = start_time.elapsed().as_secs_f64();
+                        let rate = message_count as f64 / elapsed;
+                        print!("\rStored {} messages ({:.2} msgs/sec)", message_count, rate);
+                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                        last_update = Instant::now();
+                    }
+                }
+                // Check if consumer is done
+                else => {
+                    debug!("Channel closed, no more messages");
+                    break;
+                }
+            }
+        }
+
+        // Flush the storage to ensure all messages are written
+        if !self.quiet {
+            println!("\nFlushing storage...");
+        }
+        storage.flush().await.context("Failed to flush storage")?;
+
+        // Close the storage
+        storage.close().await.context("Failed to close storage")?;
+
+        // Get the final message count from the consumer
+        let consumer_result = consumer_handle.await.context("Failed to join consumer task")?;
+        let consumer_count = consumer_result.context("Consumer task failed")?;
+
+        // Get storage stats
+        let stats = storage.get_stats();
+
+        if !self.quiet {
+            println!("\nStorage operation completed:");
+            println!("  Messages processed by consumer: {}", consumer_count);
+            println!("  Messages stored: {}", stats.message_count);
+            println!("  Total size: {} bytes", stats.total_size);
+            println!("  Topic count: {}", stats.topic_count);
+            println!("  Partition count: {}", stats.partition_count);
+            if let Some(earliest) = stats.earliest_timestamp {
+                println!("  Earliest message timestamp: {}", earliest);
+            }
+            if let Some(latest) = stats.latest_timestamp {
+                println!("  Latest message timestamp: {}", latest);
+            }
+            let elapsed = start_time.elapsed().as_secs_f64();
+            println!("  Elapsed time: {:.2} seconds", elapsed);
+            println!("  Average rate: {:.2} msgs/sec", message_count as f64 / elapsed);
+        }
+
         Ok(())
     }
 }
@@ -159,6 +393,10 @@ impl StoreCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::fs;
+    use tempfile::tempdir;
+    use tokio::test as async_test;
 
     #[test]
     fn test_parse_from_offsets_valid() {
@@ -404,5 +642,160 @@ mod tests {
         assert!(result.is_ok());
         let offsets = result.unwrap();
         assert_eq!(offsets.len(), 0);
+    }
+
+    #[async_test]
+    async fn test_execute_no_destination() {
+        // Create a StoreCommand with no destination
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            to_dir: None,
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_offsets: None,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: true, // Quiet to avoid console output during tests
+            dry_run: false,
+        };
+
+        // Execute the command
+        let result = cmd.execute().await;
+
+        // Check that the result is an error with the expected message
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No destination specified"));
+    }
+
+    #[async_test]
+    async fn test_execute_dry_run() {
+        // Create a StoreCommand with dry_run=true
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            to_dir: Some("./test-dir".to_string()),
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_offsets: None,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: true, // Quiet to avoid console output during tests
+            dry_run: true,
+        };
+
+        // Execute the command
+        let result = cmd.execute().await;
+
+        // Check that the result is Ok (dry run should succeed without doing anything)
+        assert!(result.is_ok());
+    }
+
+    #[async_test]
+    async fn test_execute_invalid_header_format() {
+        // Create a StoreCommand with invalid header format
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            to_dir: Some("./test-dir".to_string()),
+            to_file: None,
+            to_db: None,
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_offsets: None,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: Some(vec!["invalid-header".to_string()]), // Missing equals sign
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: true, // Quiet to avoid console output during tests
+            dry_run: false,
+        };
+
+        // Execute the command
+        let result = cmd.execute().await;
+
+        // Check that the result is an error with the expected message
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid format for --header"));
+        assert!(err.contains("invalid-header"));
+    }
+
+    #[async_test]
+    async fn test_execute_db_not_implemented() {
+        // Create a StoreCommand with to_db
+        let cmd = StoreCommand {
+            topic: "test-topic".to_string(),
+            bootstrap_servers: "localhost:9092".to_string(),
+            to_dir: None,
+            to_file: None,
+            to_db: Some("postgres://localhost/test".to_string()),
+            table_name: None,
+            format: "json".to_string(),
+            from_beginning: false,
+            from_offsets: None,
+            from_timestamp: None,
+            count: None,
+            until_offset: None,
+            until_timestamp: None,
+            live: false,
+            partitions: None,
+            key_regex: None,
+            header: None,
+            batch_size: 100,
+            buffer_size: 1000,
+            threads: None,
+            compression: "none".to_string(),
+            verbose: false,
+            quiet: true, // Quiet to avoid console output during tests
+            dry_run: false,
+        };
+
+        // Execute the command
+        let result = cmd.execute().await;
+
+        // Check that the result is an error with the expected message
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Database storage is not implemented yet"));
     }
 }
