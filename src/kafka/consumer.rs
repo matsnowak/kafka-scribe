@@ -180,10 +180,42 @@ impl KafkaConsumer {
                     for partition in topic.partitions() {
                         tpl.add_partition_offset(&self.config.topic, partition.id(), Offset::Offset(timestamp))?;
                     }
+                } else {
+                    return Err(anyhow::anyhow!("Topic '{}' not found", self.config.topic));
                 }
             }
-            let offsets = consumer.offsets_for_times(tpl, Timeout::After(Duration::from_secs(10)))?;
-            consumer.assign(&offsets)?;
+            
+            // Resolve timestamps to actual offsets
+            let resolved_offsets = consumer.offsets_for_times(tpl, Timeout::After(Duration::from_secs(10)))?;
+            
+            // Validate that we found at least some messages
+            let mut found_any = false;
+            for element in resolved_offsets.elements() {
+                match element.offset() {
+                    Offset::Offset(offset) => {
+                        found_any = true;
+                        info!("Resolved timestamp {} to offset {} for partition {}", 
+                              timestamp, offset, element.partition());
+                    }
+                    Offset::Invalid => {
+                        warn!("No messages found after timestamp {} in partition {}", 
+                              timestamp, element.partition());
+                    }
+                    _ => {
+                        debug!("Unexpected offset type for partition {}: {:?}", 
+                               element.partition(), element.offset());
+                    }
+                }
+            }
+            
+            if !found_any {
+                return Err(anyhow::anyhow!(
+                    "No messages found after timestamp {} in any partition of topic '{}'", 
+                    timestamp, self.config.topic
+                ));
+            }
+            
+            consumer.assign(&resolved_offsets)?;
         }
 
         self.consumer = Some(consumer);

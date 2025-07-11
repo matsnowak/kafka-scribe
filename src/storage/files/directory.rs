@@ -150,9 +150,7 @@ impl DirectoryStorage {
 
         // Update partitions map
         let mut partitions = self.partitions.lock().unwrap();
-        let topic_partitions = partitions
-            .entry(message.topic.clone())
-            .or_default();
+        let topic_partitions = partitions.entry(message.topic.clone()).or_default();
         topic_partitions.insert(message.partition);
 
         // Update stats with new counts
@@ -192,6 +190,11 @@ impl StorageBackend for DirectoryStorage {
 
         file.write_all(json.as_bytes()).await.map_err(|e| {
             StorageError::StoreFailed(format!("Failed to write to file {}: {}", path.display(), e))
+        })?;
+
+        // TODO: verify performance
+        file.flush().await.map_err(|e| {
+            StorageError::StoreFailed(format!("Failed to flush file {}: {}", path.display(), e))
         })?;
 
         // Update statistics
@@ -250,8 +253,20 @@ impl StorageBackend for DirectoryStorage {
 mod tests {
     use super::*;
     use std::fs;
+    use std::time::Duration;
     use tempfile::tempdir;
     use tokio::test;
+
+    async fn wait_for_file_exists(path: &std::path::Path, timeout: Duration) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if path.exists() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
 
     #[test]
     async fn test_directory_storage_initialization() {
@@ -269,7 +284,6 @@ mod tests {
 
     #[test]
     async fn test_directory_storage_store_message() {
-        // Create a temporary directory for testing
         let temp_dir = tempdir().unwrap();
         let config = DirectoryStorageConfig {
             base_dir: temp_dir.path().to_path_buf(),
@@ -280,7 +294,6 @@ mod tests {
         let storage = DirectoryStorage::new(config);
         storage.initialize().await.unwrap();
 
-        // Create a test message
         let message = KafkaMessage::new(
             Some(b"key".to_vec()),
             Some(b"value".to_vec()),
@@ -290,16 +303,19 @@ mod tests {
         )
         .with_timestamp(1640995200000);
 
-        // Store the message
         assert!(storage.store_message(message.clone()).await.is_ok());
 
-        // Check that the file was created
         let expected_path = temp_dir
             .path()
             .join("test-topic")
             .join("partition-0")
             .join("123.json");
-        assert!(expected_path.exists());
+
+        assert!(
+            wait_for_file_exists(&expected_path, Duration::from_secs(5)).await,
+            "File should exist at {:?}",
+            expected_path
+        );
 
         // Check the content of the file
         let content = fs::read_to_string(expected_path).unwrap();
