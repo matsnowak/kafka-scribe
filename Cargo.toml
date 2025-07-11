@@ -54,6 +54,9 @@ dialoguer = "0.11"
 proptest = "1.0"
 tempfile = "3.3"
 mockall = "0.11"
+testcontainers = "0.14"
+rand = "0.8"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["database"]

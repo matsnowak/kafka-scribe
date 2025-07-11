@@ -1,0 +1,118 @@
+[
+  {
+    "key": "user-1",
+    "value": {
+      "id": 1,
+      "name": "John Doe",
+      "email": "john.doe@example.com",
+      "timestamp": 1625097600000,
+      "data": {
+        "field1": "value1",
+        "field2": 42,
+        "field3": true
+      }
+    },
+    "headers": {
+      "message-type": "user",
+      "region": "us",
+      "sequence": "1"
+    },
+    "partition": 0,
+    "offset": 0,
+    "timestamp": 1625097600000
+  },
+  {
+    "key": "order-1",
+    "value": {
+      "id": 1001,
+      "user_id": 1,
+      "items": [
+        {
+          "product_id": 5001,
+          "quantity": 2,
+          "price": 29.99
+        },
+        {
+          "product_id": 5002,
+          "quantity": 1,
+          "price": 49.99
+        }
+      ],
+      "total": 109.97,
+      "timestamp": 1625097600000
+    },
+    "headers": {
+      "message-type": "order",
+      "region": "us",
+      "sequence": "2"
+    },
+    "partition": 0,
+    "offset": 1,
+    "timestamp": 1625097600000
+  },
+  {
+    "key": "payment-1",
+    "value": {
+      "id": 2001,
+      "order_id": 1001,
+      "amount": 109.97,
+      "method": "credit_card",
+      "status": "completed",
+      "timestamp": 1625097600000
+    },
+    "headers": {
+      "message-type": "payment",
+      "region": "us",
+      "sequence": "3"
+    },
+    "partition": 0,
+    "offset": 2,
+    "timestamp": 1625097600000
+  },
+  {
+    "key": "user-2",
+    "value": {
+      "id": 2,
+      "name": "Jane Smith",
+      "email": "jane.smith@example.com",
+      "timestamp": 1625097600000,
+      "data": {
+        "field1": "value2",
+        "field2": 43,
+        "field3": false
+      }
+    },
+    "headers": {
+      "message-type": "user",
+      "region": "eu",
+      "sequence": "4"
+    },
+    "partition": 1,
+    "offset": 0,
+    "timestamp": 1625097600000
+  },
+  {
+    "key": "order-2",
+    "value": {
+      "id": 1002,
+      "user_id": 2,
+      "items": [
+        {
+          "product_id": 5003,
+          "quantity": 1,
+          "price": 19.99
+        }
+      ],
+      "total": 19.99,
+      "timestamp": 1625097600000
+    },
+    "headers": {
+      "message-type": "order",
+      "region": "eu",
+      "sequence": "5"
+    },
+    "partition": 1,
+    "offset": 1,
+    "timestamp": 1625097600000
+  }
+]
