@@ -10,7 +10,7 @@ use tokio::runtime::Runtime;
 use tracing::{debug, info};
 
 use super::common::cli_helpers::{
-    run_store_command, validate_stored_messages, validate_success, TestDirectory,
+    run_store_command, validate_stored_messages, validate_stored_messages_in_file, validate_success, TestDirectory,
 };
 use super::common::kafka_setup::KafkaTestContext;
 use super::common::test_data::{generate_test_messages, generate_binary_test_messages, generate_key_filtered_test_messages, generate_header_filtered_test_messages, generate_timestamped_test_messages};
@@ -62,6 +62,7 @@ async fn test_basic_store_to_directory() -> Result<()> {
         temp_dir.path().to_str().unwrap(),
         "--count",
         "10",
+        "--from-beginning",
     ];
     let output = run_store_command(args)?;
 
@@ -103,6 +104,7 @@ async fn test_store_to_file() -> Result<()> {
         output_file.to_str().unwrap(),
         "--count",
         "10",
+        "--from-beginning",
     ];
     let output = run_store_command(args)?;
 
@@ -110,7 +112,7 @@ async fn test_store_to_file() -> Result<()> {
     validate_success(&output)?;
 
     // Validate stored messages
-    validate_stored_messages(&temp_dir, 10, |_| Ok(()))?;
+    validate_stored_messages_in_file(&temp_dir, "output.json", 10, |_| Ok(()))?;
 
     Ok(())
 }

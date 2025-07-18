@@ -157,7 +157,25 @@ impl KafkaConsumer {
         }
 
         // Set starting position if specified
-        if let Some(offsets) = &self.config.from_offsets {
+        if self.config.from_beginning {
+            // Explicitly seek to the beginning of the topic
+            let mut tpl = TopicPartitionList::new();
+
+            // Get all partitions for the topic
+            let metadata = consumer.fetch_metadata(Some(&self.config.topic), Timeout::After(Duration::from_secs(10)))?;
+            if let Some(topic) = metadata.topics().first() {
+                for partition in topic.partitions() {
+                    if self.config.partitions.is_none() || self.config.partitions.as_ref().unwrap().contains(&partition.id()) {
+                        tpl.add_partition_offset(&self.config.topic, partition.id(), Offset::Beginning)?;
+                    }
+                }
+            } else {
+                return Err(anyhow::anyhow!("Topic '{}' not found", self.config.topic));
+            }
+
+            consumer.assign(&tpl)?;
+            info!("Seeking to the beginning of topic '{}'", self.config.topic);
+        } else if let Some(offsets) = &self.config.from_offsets {
             let mut tpl = TopicPartitionList::new();
             if !offsets.is_empty() {
                 // Use the specified partition offsets

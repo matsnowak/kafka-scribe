@@ -3,9 +3,10 @@
 //! This module provides functions for running the kafka-scribe binary
 //! with different arguments and validating the output and exit code.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -52,41 +53,191 @@ impl TestDirectory {
         Ok(count)
     }
 
-    /// Reads all JSON messages from files in the temporary directory.
+    /// Reads all JSON messages from files in the temporary directory, recursively.
     pub fn read_json_messages(&self) -> Result<Vec<JsonMessage>> {
         let mut messages = Vec::new();
+        self.read_json_messages_recursive(self.dir.path(), &mut messages)?;
+        Ok(messages)
+    }
 
-        for entry in fs::read_dir(self.dir.path()).context("Failed to read directory")? {
+    /// Helper method to recursively read JSON messages from files in a directory.
+    fn read_json_messages_recursive(&self, dir: &Path, messages: &mut Vec<JsonMessage>) -> Result<()> {
+        for entry in fs::read_dir(dir).context(format!("Failed to read directory: {}", dir.display()))? {
             let entry = entry.context("Failed to read directory entry")?;
-            if !entry.file_type().context("Failed to get file type")?.is_file() {
-                continue;
-            }
+            let path = entry.path();
+            let file_type = entry.file_type().context("Failed to get file type")?;
 
-            let file = File::open(entry.path()).context("Failed to open file")?;
-            let reader = BufReader::new(file);
+            if file_type.is_dir() {
+                // Recursively process subdirectories
+                self.read_json_messages_recursive(&path, messages)?;
+            } else if file_type.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+                // Process JSON files
+                let file = File::open(&path).context(format!("Failed to open file: {}", path.display()))?;
+                let mut reader = BufReader::new(file);
 
-            for line in reader.lines() {
-                let line = line.context("Failed to read line")?;
-                let message: JsonMessage =
-                    serde_json::from_str(&line).context("Failed to parse JSON message")?;
+                // Read the entire file content
+                let mut content = String::new();
+                reader.read_to_string(&mut content).context(format!("Failed to read file: {}", path.display()))?;
+
+                // Parse the JSON content
+                let json: serde_json::Value = 
+                    serde_json::from_str(&content).context(format!("Failed to parse JSON from file: {}", path.display()))?;
+
+                // Extract fields for JsonMessage
+                let key = if json["key"].is_array() {
+                    // Convert byte array to string
+                    let bytes: Vec<u8> = json["key"]
+                        .as_array()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .filter_map(|v| v.as_u64().map(|n| n as u8))
+                        .collect();
+
+                    if !bytes.is_empty() {
+                        Some(String::from_utf8_lossy(&bytes).to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Extract value
+                let value = if json["value"].is_array() {
+                    // Try to parse the value bytes as JSON
+                    let bytes: Vec<u8> = json["value"]
+                        .as_array()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .filter_map(|v| v.as_u64().map(|n| n as u8))
+                        .collect();
+
+                    if !bytes.is_empty() {
+                        match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                            Ok(parsed_json) => parsed_json,
+                            Err(_) => serde_json::Value::String(String::from_utf8_lossy(&bytes).to_string())
+                        }
+                    } else {
+                        serde_json::Value::Null
+                    }
+                } else {
+                    json["value"].clone()
+                };
+
+                // Extract headers
+                let headers = if json["headers"].is_object() && !json["headers"].as_object().unwrap().is_empty() {
+                    let mut map = HashMap::new();
+                    for (k, v) in json["headers"].as_object().unwrap() {
+                        if let Some(s) = v.as_str() {
+                            map.insert(k.clone(), s.to_string());
+                        }
+                    }
+                    if map.is_empty() { None } else { Some(map) }
+                } else {
+                    None
+                };
+
+                // Create JsonMessage
+                let message = JsonMessage {
+                    key,
+                    value,
+                    headers,
+                    partition: json["partition"].as_i64().unwrap_or(0) as i32,
+                    offset: json["offset"].as_i64().unwrap_or(0),
+                    timestamp: json["timestamp"].as_i64().unwrap_or(0),
+                };
+
                 messages.push(message);
             }
         }
 
-        Ok(messages)
+        Ok(())
     }
 
     /// Reads all JSON messages from a specific file.
     pub fn read_json_messages_from_file(&self, filename: &str) -> Result<Vec<JsonMessage>> {
         let path = self.dir.path().join(filename);
-        let file = File::open(path).context("Failed to open file")?;
-        let reader = BufReader::new(file);
+        let file = File::open(&path).context(format!("Failed to open file: {}", path.display()))?;
+        let mut reader = BufReader::new(file);
         let mut messages = Vec::new();
 
+        // Process each line in the file
         for line in reader.lines() {
             let line = line.context("Failed to read line")?;
-            let message: JsonMessage =
-                serde_json::from_str(&line).context("Failed to parse JSON message")?;
+
+            // Skip empty lines
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            // Parse the JSON content
+            let json: serde_json::Value = 
+                serde_json::from_str(&line).context(format!("Failed to parse JSON from line: {}", line))?;
+
+            // Extract fields for JsonMessage
+            let key = if json["key"].is_array() {
+                // Convert byte array to string
+                let bytes: Vec<u8> = json["key"]
+                    .as_array()
+                    .unwrap_or(&Vec::new())
+                    .iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as u8))
+                    .collect();
+
+                if !bytes.is_empty() {
+                    Some(String::from_utf8_lossy(&bytes).to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Extract value
+            let value = if json["value"].is_array() {
+                // Try to parse the value bytes as JSON
+                let bytes: Vec<u8> = json["value"]
+                    .as_array()
+                    .unwrap_or(&Vec::new())
+                    .iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as u8))
+                    .collect();
+
+                if !bytes.is_empty() {
+                    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        Ok(parsed_json) => parsed_json,
+                        Err(_) => serde_json::Value::String(String::from_utf8_lossy(&bytes).to_string())
+                    }
+                } else {
+                    serde_json::Value::Null
+                }
+            } else {
+                json["value"].clone()
+            };
+
+            // Extract headers
+            let headers = if json["headers"].is_object() && !json["headers"].as_object().unwrap().is_empty() {
+                let mut map = HashMap::new();
+                for (k, v) in json["headers"].as_object().unwrap() {
+                    if let Some(s) = v.as_str() {
+                        map.insert(k.clone(), s.to_string());
+                    }
+                }
+                if map.is_empty() { None } else { Some(map) }
+            } else {
+                None
+            };
+
+            // Create JsonMessage
+            let message = JsonMessage {
+                key,
+                value,
+                headers,
+                partition: json["partition"].as_i64().unwrap_or(0) as i32,
+                offset: json["offset"].as_i64().unwrap_or(0),
+                timestamp: json["timestamp"].as_i64().unwrap_or(0),
+            };
+
             messages.push(message);
         }
 
