@@ -117,6 +117,10 @@ pub struct StoreCommand {
     #[arg(long, value_name = "ALGORITHM", default_value = "none")]
     pub compression: String,
 
+    /// Timeout for the consume operation in seconds (0 means use default)
+    #[arg(long, value_name = "SECONDS", default_value = "60")]
+    pub timeout: u64,
+
     // Common Options
     /// Verbose output
     #[arg(short, long)]
@@ -207,6 +211,7 @@ impl StoreCommand {
             headers,
             batch_size: self.batch_size,
             buffer_size: self.buffer_size,
+            timeout_seconds: self.timeout,
         };
 
         if self.verbose {
@@ -284,7 +289,7 @@ impl StoreCommand {
         consumer.initialize().await.context("Failed to initialize Kafka consumer")?;
 
         // Start the consumer in a separate task
-        let consumer_handle = tokio::spawn(async move {
+        let mut consumer_handle = tokio::spawn(async move {
             if let Err(e) = consumer.consume_messages(tx).await {
                 error!("Error consuming messages: {:?}", e);
                 return Err(e);
@@ -309,6 +314,8 @@ impl StoreCommand {
         let mut message_count = 0;
         let mut last_update = Instant::now();
         let update_interval = Duration::from_secs(1); // Update progress every second
+        let mut consumer_task_completed = false;
+        let mut consumer_result = None;
 
         loop {
             tokio::select! {
@@ -323,6 +330,13 @@ impl StoreCommand {
                     if !self.quiet {
                         println!("\nReceived termination signal, shutting down gracefully...");
                     }
+                    break;
+                }
+                // Check if consumer task has completed
+                result = &mut consumer_handle, if !consumer_task_completed => {
+                    debug!("Consumer task completed");
+                    consumer_task_completed = true;
+                    consumer_result = Some(result);
                     break;
                 }
                 // Process messages
@@ -362,8 +376,11 @@ impl StoreCommand {
         storage.close().await.context("Failed to close storage")?;
 
         // Get the final message count from the consumer
-        let consumer_result = consumer_handle.await.context("Failed to join consumer task")?;
-        let consumer_count = consumer_result.context("Consumer task failed")?;
+        let consumer_count = match consumer_result {
+            Some(Ok(count)) => count.context("Consumer task failed")?,
+            Some(Err(e)) => return Err(anyhow::anyhow!("Consumer task failed: {:?}", e)),
+            None => consumer_handle.await.context("Failed to join consumer task")?.context("Consumer task failed")?,
+        };
 
         // Get storage stats
         let stats = storage.get_stats();
@@ -424,6 +441,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: false,
             dry_run: false,
@@ -467,6 +485,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: false,
             dry_run: false,
@@ -508,6 +527,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: false,
             dry_run: false,
@@ -549,6 +569,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: false,
             dry_run: false,
@@ -590,6 +611,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: false,
             dry_run: false,
@@ -630,6 +652,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: false,
             dry_run: false,
@@ -669,6 +692,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: true, // Quiet to avoid console output during tests
             dry_run: false,
@@ -708,6 +732,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: true, // Quiet to avoid console output during tests
             dry_run: true,
@@ -745,6 +770,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: true, // Quiet to avoid console output during tests
             dry_run: false,
@@ -785,6 +811,7 @@ mod tests {
             buffer_size: 1000,
             threads: None,
             compression: "none".to_string(),
+            timeout: 60,
             verbose: false,
             quiet: true, // Quiet to avoid console output during tests
             dry_run: false,

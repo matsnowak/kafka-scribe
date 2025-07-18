@@ -373,7 +373,7 @@ async fn test_store_with_timestamp_filter() -> Result<()> {
         temp_dir.path().to_str().unwrap(),
         "--from-timestamp",
         &threshold_str,
-        "--from-beginning",
+        // Removed "--from-beginning" as it conflicts with "--from-timestamp"
     ];
     let output = run_store_command(args)?;
 
@@ -437,13 +437,25 @@ async fn test_store_non_existent_topic() -> Result<()> {
         "--to-dir",
         temp_dir.path().to_str().unwrap(),
         "--count",
-        "10",
+        "1", // Only try to get 1 message to fail faster
     ];
     let output = run_store_command(args)?;
 
-    // Validate command output - should fail or timeout waiting for messages
-    // Note: This behavior depends on how the CLI handles non-existent topics
-    // It might wait indefinitely, timeout, or fail immediately
+    // Validate command output - should fail when trying to consume from a non-existent topic
+    // The command should exit with a non-zero status code
+    assert!(!output.status.success(), "Command should fail with non-existent topic");
+
+    // Check that the output contains a topic-related error message
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let output_text = format!("{}\n{}", stdout, stderr);
+
+    assert!(
+        output_text.contains("topic") || 
+        output_text.contains("error") || 
+        output_text.contains("failed"),
+        "Error message should mention topic or error: {}", output_text
+    );
 
     Ok(())
 }

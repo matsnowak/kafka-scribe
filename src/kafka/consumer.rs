@@ -53,6 +53,8 @@ pub struct KafkaConsumerConfig {
     pub batch_size: u32,
     /// Buffer size for the message channel
     pub buffer_size: u32,
+    /// Overall timeout for the consume operation in seconds (0 means no timeout)
+    pub timeout_seconds: u64,
 }
 
 impl Default for KafkaConsumerConfig {
@@ -73,6 +75,7 @@ impl Default for KafkaConsumerConfig {
             headers: None,
             batch_size: 100,
             buffer_size: 1000,
+            timeout_seconds: 60, // Default timeout of 60 seconds
         }
     }
 }
@@ -134,11 +137,7 @@ impl KafkaConsumer {
             .set("bootstrap.servers", &self.config.bootstrap_servers)
             .set("group.id", &self.config.group_id)
             .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", if self.config.from_beginning {
-                "earliest"
-            } else {
-                "latest"
-            })
+            .set("auto.offset.reset", "earliest")  // Always start from earliest by default
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", "6000")
             .set("max.poll.interval.ms", "300000")
@@ -184,10 +183,10 @@ impl KafkaConsumer {
                     return Err(anyhow::anyhow!("Topic '{}' not found", self.config.topic));
                 }
             }
-            
+
             // Resolve timestamps to actual offsets
             let resolved_offsets = consumer.offsets_for_times(tpl, Timeout::After(Duration::from_secs(10)))?;
-            
+
             // Validate that we found at least some messages
             let mut found_any = false;
             for element in resolved_offsets.elements() {
@@ -207,14 +206,14 @@ impl KafkaConsumer {
                     }
                 }
             }
-            
+
             if !found_any {
                 return Err(anyhow::anyhow!(
                     "No messages found after timestamp {} in any partition of topic '{}'", 
                     timestamp, self.config.topic
                 ));
             }
-            
+
             consumer.assign(&resolved_offsets)?;
         }
 
@@ -229,16 +228,35 @@ impl KafkaConsumer {
             None => return Err(anyhow::anyhow!("Consumer not initialized")),
         };
 
+        // Create a clone of the sender that we'll drop at the end to close the channel
+        let tx_clone = tx.clone();
+
         let mut message_count = 0u64;
         let count_limit = self.config.count;
         let until_offset = self.config.until_offset;
         let until_timestamp = self.config.until_timestamp;
+
+        // Set up overall operation timeout if configured
+        let start_time = std::time::Instant::now();
+        let timeout_duration = if self.config.timeout_seconds > 0 {
+            Some(Duration::from_secs(self.config.timeout_seconds))
+        } else {
+            None
+        };
 
         loop {
             // Check if we've reached the count limit
             if let Some(limit) = count_limit {
                 if message_count >= limit {
                     info!("Reached message count limit of {}", limit);
+                    break;
+                }
+            }
+
+            // Check if we've reached the overall timeout
+            if let Some(timeout) = timeout_duration {
+                if start_time.elapsed() >= timeout {
+                    info!("Reached overall timeout of {} seconds", self.config.timeout_seconds);
                     break;
                 }
             }
@@ -252,6 +270,13 @@ impl KafkaConsumer {
                         debug!("No more messages available and not in live mode");
                         break;
                     }
+
+                    // If we've been trying for a while with no messages, consider breaking
+                    if !self.config.live && message_count == 0 && start_time.elapsed() > Duration::from_secs(5) {
+                        debug!("No messages received after 5 seconds, considering topic empty");
+                        break;
+                    }
+
                     continue;
                 }
             };
@@ -309,6 +334,11 @@ impl KafkaConsumer {
         }
 
         info!("Consumed {} messages", message_count);
+
+        // Drop the sender clone to signal that no more messages will be sent
+        // This will close the channel if all senders are dropped
+        drop(tx_clone);
+
         Ok(())
     }
 
@@ -371,9 +401,9 @@ impl KafkaConsumer {
         let offset = message.offset();
         let timestamp = message.timestamp().to_millis();
 
-        // Debug output to understand the issue
-        println!("OwnedMessage key: {:?}", key);
-        println!("OwnedMessage payload: {:?}", payload);
+        // Debug output using proper logging
+        debug!("OwnedMessage key: {:?}", key);
+        debug!("OwnedMessage payload: {:?}", payload);
 
         let mut kafka_message = KafkaMessage::new(
             key,

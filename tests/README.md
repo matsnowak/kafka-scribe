@@ -17,6 +17,7 @@ tests/
 │   ├── test_data.rs            # Utilities for generating test data
 │   └── cli_helpers.rs          # Utilities for executing CLI commands
 └── fixtures/
+    ├── docker-compose.yml      # Docker Compose configuration for Kafka
     └── sample_messages/        # Sample messages for testing
 ```
 
@@ -64,9 +65,30 @@ cargo test --test integration -- test_basic_store_to_directory
 
 The integration tests require:
 
-1. **Docker**: The tests use testcontainers to start Kafka in Docker containers.
+1. **Running Kafka Instance**: The tests assume that Kafka is already running and accessible at `localhost:29092`.
 2. **Rust**: The tests are written in Rust and require a Rust toolchain.
-3. **Internet Access**: The tests may need to download Docker images.
+
+### Starting Kafka Manually
+
+Before running the tests, you need to start Kafka manually using the provided Docker Compose configuration:
+
+```bash
+cd tests/fixtures
+docker compose up -d
+# or if you're using the older docker-compose command
+docker-compose up -d
+```
+
+The docker-compose configuration is located at `tests/fixtures/docker-compose.yml`.
+
+To stop Kafka after running the tests:
+
+```bash
+cd tests/fixtures
+docker compose down
+# or if you're using the older docker-compose command
+docker-compose down
+```
 
 ## Troubleshooting
 
@@ -76,17 +98,38 @@ The integration tests require:
    - Error: `Failed to connect to Docker daemon`
    - Solution: Start Docker with `systemctl start docker` or equivalent
 
-2. **Port conflicts**:
+2. **Docker Compose command not found**:
+   - Error: `No such file or directory (os error 2)` when executing docker-compose
+   - Solution: The code will automatically try both `docker compose` (new style) and `docker-compose` (old style) commands
+
+3. **Port conflicts**:
    - Error: `Failed to bind to address`
    - Solution: Ensure no other services are using the required ports
 
-3. **Timeouts**:
+4. **Timeouts**:
    - Error: `Timed out waiting for Kafka to be ready`
    - Solution: Increase the timeout in `kafka_setup.rs`
 
-4. **Permission issues**:
+5. **Permission issues**:
    - Error: `Permission denied`
    - Solution: Ensure the user has permission to create files in the test directories
+
+6. **Zookeeper container fails to start**:
+   - Error: `dependency failed to start: container zookeeper exited (1)` or `dependency failed to start: container zookeeper is unhealthy`
+   - Solution: The docker-compose.yml file has been updated with the following improvements:
+     - Using Confluent Platform 6.2.1 instead of 7.3.0, which is more stable
+     - Removed the obsolete `version` attribute
+     - Added additional Zookeeper configuration parameters (SERVER_ID, MAX_CLIENT_CNXNS, 4LW_COMMANDS_WHITELIST)
+     - Added memory limits (512MB for Zookeeper, 1GB for Kafka)
+     - Increased healthcheck start periods to 30s to give containers more time to initialize
+     - Added additional Kafka parameters for better testing (AUTO_CREATE_TOPICS_ENABLE, LOG_RETENTION_MS)
+
+7. **Connection refused when connecting to Kafka**:
+   - Error: `localhost:29092/bootstrap: Connect to ipv4#127.0.0.1:29092 failed: Connection refused`
+   - Solution: The docker-compose.yml file has been updated with the following improvements:
+     - Added explicit KAFKA_LISTENERS configuration to bind to all interfaces (0.0.0.0)
+     - Added KAFKA_INTER_BROKER_LISTENER_NAME to specify which listener to use for broker communication
+     - Added KAFKA_ALLOW_PLAINTEXT_LISTENER to explicitly allow plaintext listeners
 
 ### Debugging Tests
 
@@ -106,19 +149,20 @@ To add new tests:
 
 ## Performance Considerations
 
-The integration tests start real Kafka brokers in Docker containers, which can be resource-intensive. To improve performance:
+The integration tests connect to a running Kafka instance, which should be started manually before running the tests. To improve performance:
 
 1. Use the `--test` flag to run only the integration tests you need
 2. Consider running tests in parallel with `--parallel`
-3. Reuse Kafka instances across tests where possible
+3. Keep the Kafka instance running between test runs to avoid startup overhead
 
 ## CI/CD Integration
 
 These tests are designed to run in CI/CD environments. In your CI configuration:
 
 1. Ensure Docker is available
-2. Set appropriate timeouts for test execution
-3. Consider caching Docker images to speed up test runs
+2. Start Kafka before running the tests
+3. Set appropriate timeouts for test execution
+4. Consider caching Docker images to speed up test runs
 
 Example GitHub Actions configuration:
 
@@ -130,12 +174,33 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # Ensure Docker is available
+      docker:
+        image: docker:dind
+        options: --privileged
     steps:
       - uses: actions/checkout@v2
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+      - name: Install docker-compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose
+      - name: Start Kafka
+        run: |
+          cd tests/fixtures
+          docker-compose up -d
+          # Wait for Kafka to be ready
+          sleep 30
       - name: Run integration tests
         run: cargo test --test integration
+        env:
+          RUST_LOG: info
+      - name: Stop Kafka
+        run: |
+          cd tests/fixtures
+          docker-compose down
 ```

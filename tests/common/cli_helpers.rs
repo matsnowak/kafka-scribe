@@ -97,9 +97,10 @@ impl TestDirectory {
 /// Runs the kafka-scribe binary with the given arguments.
 pub fn run_kscribe<I, S>(args: I) -> Result<Output>
 where
-    I: IntoIterator<Item = S>,
+    I: IntoIterator<Item = S> + std::fmt::Debug,
     S: AsRef<OsStr>,
 {
+    debug!("Running command: {:?}", args);
     let output = Command::new("cargo")
         .args(["run", "--"])
         .args(args)
