@@ -190,6 +190,9 @@ impl KafkaTestContext {
     pub async fn create_topic(&self, topic_name: &str, partitions: i32) -> Result<()> {
         info!("Creating topic: {} with {} partitions", topic_name, partitions);
 
+        // First, try to delete the topic if it exists
+        let _ = self.delete_topic(topic_name).await;
+
         let admin: AdminClient<DefaultClientContext> = ClientConfig::new()
             .set("bootstrap.servers", &self.bootstrap_servers)
             .create()
@@ -206,6 +209,27 @@ impl KafkaTestContext {
         sleep(Duration::from_secs(2)).await;
 
         info!("Topic created: {}", topic_name);
+        Ok(())
+    }
+
+    /// Deletes a topic with the given name.
+    pub async fn delete_topic(&self, topic_name: &str) -> Result<()> {
+        info!("Deleting topic: {}", topic_name);
+
+        let admin: AdminClient<DefaultClientContext> = ClientConfig::new()
+            .set("bootstrap.servers", &self.bootstrap_servers)
+            .create()
+            .context("Failed to create admin client")?;
+
+        admin
+            .delete_topics(&[topic_name], &AdminOptions::new())
+            .await
+            .context("Failed to delete topic")?;
+
+        // Wait for topic to be deleted
+        sleep(Duration::from_secs(2)).await;
+
+        info!("Topic deleted: {}", topic_name);
         Ok(())
     }
 
