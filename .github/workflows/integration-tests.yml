@@ -10,17 +10,23 @@ jobs:
   test:
     name: Run Integration Tests
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
+
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      
+          components: llvm-tools-preview
+
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+
       - name: Cache dependencies
         uses: actions/cache@v3
         with:
@@ -31,16 +37,60 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      
+
       - name: Install dependencies
         run: cargo build --verbose
-      
-      - name: Run integration tests
-        run: cargo test --test integration --verbose
+
+      - name: Start Kafka
+        run: |
+          cd tests/fixtures
+          docker-compose up -d
+          # Wait for Kafka to be ready
+          echo "Waiting for Kafka to be ready..."
+          timeout 60s bash -c 'until nc -z localhost 29092; do sleep 1; done'
+          echo "Kafka is ready"
+
+      - name: Create test results directory
+        run: mkdir -p target/test-results
+
+      - name: Run integration tests with coverage
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_on: error
+          command: |
+            cargo llvm-cov nextest run --test integration --verbose --lcov --output-path lcov.info
+            cargo nextest run --test integration --no-capture --junit output_file=target/test-results/integration-tests.xml
+          on_retry_command: |
+            # Restart Kafka on retry
+            cd tests/fixtures
+            docker-compose down
+            docker-compose up -d
+            # Wait for Kafka to be ready
+            echo "Waiting for Kafka to be ready..."
+            timeout 60s bash -c 'until nc -z localhost 29092; do sleep 1; done'
+            echo "Kafka is ready"
         env:
           RUST_LOG: info
-      
-      - name: Run specific store command tests
-        run: cargo test --test integration -- store_command_tests::test_basic_store_to_directory --verbose
-        env:
-          RUST_LOG: debug
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+
+      - name: Generate test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Integration Tests
+          path: target/test-results/*.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Stop Kafka
+        if: always()
+        run: |
+          cd tests/fixtures
+          docker-compose down
