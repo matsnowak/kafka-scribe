@@ -1,15 +1,17 @@
 //! Utilities for generating test data for integration tests.
 //!
-//! This module provides functions for generating test messages with
-//! different characteristics for use in integration tests.
+//! This module provides functions and a TestDataGenerator for creating
+//! test messages with different characteristics for use in integration tests.
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distributions::Alphanumeric, Rng, RngCore, SeedableRng};
+use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
+use uuid::Uuid;
 
 /// A test message for use in integration tests.
 #[derive(Debug, Clone)]
@@ -242,9 +244,9 @@ pub fn generate_timestamped_test_messages() -> Vec<TestMessage> {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    
+
     let mut messages = Vec::new();
-    
+
     // Messages from 1 hour ago
     for i in 0..5 {
         let key = format!("past-{}", i);
@@ -253,12 +255,12 @@ pub fn generate_timestamped_test_messages() -> Vec<TestMessage> {
             "time": "past",
             "data": random_string(10),
         });
-        
+
         let mut msg = TestMessage::new_json(key, value, None);
         msg.timestamp = now - 3600000; // 1 hour ago
         messages.push(msg);
     }
-    
+
     // Recent messages
     for i in 5..10 {
         let key = format!("recent-{}", i);
@@ -267,9 +269,193 @@ pub fn generate_timestamped_test_messages() -> Vec<TestMessage> {
             "time": "recent",
             "data": random_string(10),
         });
-        
+
         messages.push(TestMessage::new_json(key, value, None));
     }
-    
+
     messages
+}
+
+/// A generator for creating test data with deterministic output.
+pub struct TestDataGenerator {
+    /// Random number generator with seed for reproducibility
+    rng: StdRng,
+}
+
+impl TestDataGenerator {
+    /// Create a new generator with a specific seed for reproducibility
+    pub fn new(seed: u64) -> Self {
+        Self {
+            rng: StdRng::seed_from_u64(seed),
+        }
+    }
+
+    /// Create a generator with a random seed
+    pub fn new_random() -> Self {
+        Self {
+            rng: StdRng::from_entropy(),
+        }
+    }
+
+    /// Generate a JSON message with order data
+    pub fn generate_order_message(&mut self) -> TestMessage {
+        let order_id = format!("order-{}", Uuid::new_v4());
+        let customer_id = format!("customer-{}", self.rng.gen_range(1..1000));
+        let product_id = format!("product-{}", self.rng.gen_range(1..100));
+        let quantity = self.rng.gen_range(1..10);
+        let price = (self.rng.gen_range(100..10000) as f64) / 100.0;
+
+        let value = json!({
+            "order_id": order_id,
+            "customer_id": customer_id,
+            "product_id": product_id,
+            "quantity": quantity,
+            "price": price,
+            "status": "PENDING",
+            "timestamp": SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64
+        });
+
+        let mut headers = HashMap::new();
+        headers.insert("source".to_string(), "test-generator".to_string());
+
+        let mut msg = TestMessage::new_json(customer_id, value, Some(headers));
+        msg.timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        msg
+    }
+
+    /// Generate a binary message with random content
+    pub fn generate_binary_message(&mut self, size: usize) -> TestMessage {
+        let mut data = vec![0u8; size];
+        self.rng.fill_bytes(&mut data);
+
+        let key = format!("binary-{}", Uuid::new_v4());
+
+        let mut headers = HashMap::new();
+        headers.insert(
+            "content-type".to_string(),
+            "application/octet-stream".to_string(),
+        );
+
+        let headers_bytes = headers.into_iter()
+            .map(|(k, v)| (k, v.as_bytes().to_vec()))
+            .collect();
+
+        let mut msg = TestMessage::new(key.as_bytes().to_vec(), data, Some(headers_bytes));
+        msg.timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        msg
+    }
+
+    /// Generate a text log message
+    pub fn generate_log_message(&mut self, level: &str) -> TestMessage {
+        let log_levels = ["INFO", "WARN", "ERROR", "DEBUG"];
+        let log_level = level.to_uppercase();
+        if !log_levels.contains(&log_level.as_str()) {
+            panic!("Invalid log level: {}", level);
+        }
+
+        let service_names = ["api", "auth", "payment", "inventory", "shipping"];
+        let service = service_names[self.rng.gen_range(0..service_names.len())];
+
+        let messages = match log_level.as_str() {
+            "INFO" => vec!["User logged in", "Request processed", "Payment received", "Order shipped"],
+            "WARN" => vec!["Slow database query", "API rate limit approaching", "High memory usage"],
+            "ERROR" => vec!["Database connection failed", "Payment declined", "API request timeout"],
+            "DEBUG" => vec!["Function X called with params Y", "Processing item Z", "Cache hit ratio: 0.8"],
+            _ => vec!["Unknown log message"],
+        };
+
+        let message = messages[self.rng.gen_range(0..messages.len())];
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis().to_string();
+        let log_message = format!("[{}] [{} {}] {}", 
+            timestamp,
+            service,
+            log_level,
+            message
+        );
+
+        let key = format!("{}-{}", service, Uuid::new_v4());
+
+        let mut headers = HashMap::new();
+        headers.insert("log-level".to_string(), log_level.clone());
+        headers.insert("service".to_string(), service.to_string());
+
+        let headers_bytes = headers.into_iter()
+            .map(|(k, v)| (k, v.as_bytes().to_vec()))
+            .collect();
+
+        let mut msg = TestMessage::new(
+            key.as_bytes().to_vec(),
+            log_message.as_bytes().to_vec(),
+            Some(headers_bytes),
+        );
+        msg.timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        msg
+    }
+
+    /// Generate a batch of messages
+    pub fn generate_message_batch(&mut self, count: usize) -> Vec<TestMessage> {
+        let mut messages = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            let message_type = self.rng.gen_range(0..3);
+            let message = match message_type {
+                0 => self.generate_order_message(),
+                1 => self.generate_binary_message(100),
+                _ => {
+                    let log_levels = ["INFO", "WARN", "ERROR", "DEBUG"];
+                    let level = log_levels[self.rng.gen_range(0..log_levels.len())];
+                    self.generate_log_message(level)
+                }
+            };
+            messages.push(message);
+        }
+
+        messages
+    }
+
+    /// Generate messages with a specific pattern for filtering tests
+    pub fn generate_filterable_messages(&mut self, key_pattern: &str, count: usize) -> Vec<TestMessage> {
+        let mut messages = Vec::with_capacity(count);
+
+        for i in 0..count {
+            let key = format!("{}-{}", key_pattern, i);
+            let value = format!("Message {} for key pattern {}", i, key_pattern);
+
+            let mut headers = HashMap::new();
+            headers.insert("pattern".to_string(), key_pattern.to_string());
+
+            let headers_bytes = headers.into_iter()
+                .map(|(k, v)| (k, v.as_bytes().to_vec()))
+                .collect();
+
+            let mut msg = TestMessage::new(
+                key.as_bytes().to_vec(),
+                value.as_bytes().to_vec(),
+                Some(headers_bytes),
+            );
+            msg.timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+
+            messages.push(msg);
+        }
+
+        messages
+    }
 }

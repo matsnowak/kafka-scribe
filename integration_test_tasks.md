@@ -106,11 +106,11 @@
   - Can generate data with specific patterns for filtering tests
   - Provides deterministic output for test reproducibility
 - **Tasks:**
-  - [ ] Create test data generator functions in tests/common/test_data.rs
-  - [ ] Implement functions for different message formats
-  - [ ] Add helper methods for setting headers and keys
-  - [ ] Create preset data patterns for common test scenarios
-  - [ ] Document the generator API
+  - [x] Create test data generator functions in tests/common/test_data.rs
+  - [x] Implement functions for different message formats
+  - [x] Add helper methods for setting headers and keys
+  - [x] Create preset data patterns for common test scenarios
+  - [x] Document the generator API
 - **Detailed Description:**
 
   A robust test data generator is essential for creating reliable and comprehensive tests. The generator should be able to create messages of various formats and with different characteristics to test all aspects of the application.
