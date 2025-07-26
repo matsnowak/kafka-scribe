@@ -2,19 +2,19 @@ version: '3.8'
 
 services:
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
+    image: confluentinc/cp-zookeeper:6.2.1
     hostname: zookeeper
     container_name: zookeeper
     ports:
       - "2181:2181"
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_SERVER_ID: 1
+      ZOOKEEPER_MAX_CLIENT_CNXNS: 100
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_INIT_LIMIT: 5
       ZOOKEEPER_SYNC_LIMIT: 2
-      ZOOKEEPER_SERVER_ID: 1
-      ZOOKEEPER_MAX_CLIENT_CNXNS: 60
-      ZOOKEEPER_4LW_COMMANDS_WHITELIST: "mntr,conf,ruok,imok,srvr,stat"
+      ZOOKEEPER_4LW_COMMANDS_WHITELIST: "*"
     deploy:
       resources:
         limits:
@@ -25,14 +25,14 @@ services:
     networks:
       - kafka-test
     healthcheck:
-      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 | grep -q 'Mode: standalone' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD-SHELL", "echo stat | nc localhost 2181"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
       start_period: 30s
 
   kafka:
-    image: confluentinc/cp-kafka:7.4.0
+    image: confluentinc/cp-kafka:6.2.1
     hostname: kafka
     container_name: kafka
     depends_on:
@@ -49,12 +49,12 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_MS: 60000
+      KAFKA_ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 100
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_LOG_RETENTION_MS: 3600000
-      KAFKA_LOG_SEGMENT_BYTES: 1048576
       KAFKA_NUM_PARTITIONS: 3
     deploy:
       resources:
@@ -66,9 +66,9 @@ services:
       - kafka-test
     healthcheck:
       test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 5s
+      timeout: 10s
+      retries: 10
       start_period: 30s
 
   kafka-ui:
@@ -83,13 +83,17 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    deploy:
+      resources:
+        limits:
+          memory: 512m
     networks:
       - kafka-test
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:8080 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 5s
+      timeout: 10s
+      retries: 10
       start_period: 30s
 
 networks:

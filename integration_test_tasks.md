@@ -12,11 +12,11 @@
   - Environment is stable across multiple test runs
   - Configuration works reliably in CI environments
 - **Tasks:**
-  - [ ] Update Zookeeper and Kafka configuration for better stability
-  - [ ] Add proper health checks for services
-  - [ ] Set memory limits to prevent resource exhaustion
-  - [ ] Add network configuration to ensure proper service discovery
-  - [ ] Include configuration for faster topic creation and message delivery
+  - [x] Update Zookeeper and Kafka configuration for better stability
+  - [x] Add proper health checks for services
+  - [x] Set memory limits to prevent resource exhaustion
+  - [x] Add network configuration to ensure proper service discovery
+  - [x] Include configuration for faster topic creation and message delivery
 - **Detailed Description:**
 
   The current Docker Compose setup needs improvements for test stability. Docker Compose configuration should be updated to ensure proper startup order, resource allocation, and network configuration.
@@ -90,11 +90,11 @@
   - Environment is stable across multiple test runs
   - Configuration works reliably in CI environments
 - **Tasks:**
-  - [ ] Update Zookeeper and Kafka configuration for better stability
-  - [ ] Add proper health checks for services
-  - [ ] Set memory limits to prevent resource exhaustion
-  - [ ] Add network configuration to ensure proper service discovery
-  - [ ] Include configuration for faster topic creation and message delivery
+  - [x] Update Zookeeper and Kafka configuration for better stability
+  - [x] Add proper health checks for services
+  - [x] Set memory limits to prevent resource exhaustion
+  - [x] Add network configuration to ensure proper service discovery
+  - [x] Include configuration for faster topic creation and message delivery
 
 ### Task 2: Create Test Data Generator
 - **ID:** T2
