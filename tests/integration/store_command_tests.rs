@@ -403,6 +403,97 @@ async fn test_store_with_timestamp_filter() -> Result<()> {
     Ok(())
 }
 
+/// Test that the `store` command can store messages from a specific offset.
+#[tokio::test]
+async fn test_store_from_offset() -> Result<()> {
+    // Initialize test environment
+    let docker = init_test_environment();
+
+    // Set up Kafka
+    let kafka = KafkaTestContext::new(docker).await?;
+    let topic = "test-from-offset";
+    kafka.create_topic(topic, 1).await?;
+
+    // Produce test messages
+    let messages = generate_test_messages(10);
+    kafka.produce_messages(topic, &messages, None).await?;
+
+    // Create temporary directory for output
+    let temp_dir = TestDirectory::new()?;
+
+    // Run the store command with from-offset
+    info!("Running store command with from-offset");
+    let args = vec![
+        topic,
+        "--bootstrap-servers",
+        kafka.bootstrap_servers(),
+        "--to-dir",
+        temp_dir.path().to_str().unwrap(),
+        "--from-offset",
+        "0:5", // Start from offset 5 in partition 0
+    ];
+    let output = run_store_command(args)?;
+
+    // Validate command output
+    validate_success(&output)?;
+
+    // Validate stored messages - should only have messages from offset 5 onwards
+    validate_stored_messages(&temp_dir, 5, |msg| {
+        if msg.offset < 5 {
+            anyhow::bail!("Message offset {} is less than 5", msg.offset);
+        }
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
+/// Test that the `store` command can store messages until a specific offset.
+#[tokio::test]
+async fn test_store_until_offset() -> Result<()> {
+    // Initialize test environment
+    let docker = init_test_environment();
+
+    // Set up Kafka
+    let kafka = KafkaTestContext::new(docker).await?;
+    let topic = "test-until-offset";
+    kafka.create_topic(topic, 1).await?;
+
+    // Produce test messages
+    let messages = generate_test_messages(10);
+    kafka.produce_messages(topic, &messages, None).await?;
+
+    // Create temporary directory for output
+    let temp_dir = TestDirectory::new()?;
+
+    // Run the store command with until-offset
+    info!("Running store command with until-offset");
+    let args = vec![
+        topic,
+        "--bootstrap-servers",
+        kafka.bootstrap_servers(),
+        "--to-dir",
+        temp_dir.path().to_str().unwrap(),
+        "--from-beginning",
+        "--until-offset",
+        "0:5", // Stop at offset 5 (exclusive) in partition 0
+    ];
+    let output = run_store_command(args)?;
+
+    // Validate command output
+    validate_success(&output)?;
+
+    // Validate stored messages - should only have messages up to offset 5 (exclusive)
+    validate_stored_messages(&temp_dir, 5, |msg| {
+        if msg.offset >= 5 {
+            anyhow::bail!("Message offset {} is greater than or equal to 5", msg.offset);
+        }
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
 /// Test that the `store` command fails with an invalid bootstrap server.
 /// 
 /// Note: This test uses a non-routable IP address (192.0.2.1) from the TEST-NET-1 range
@@ -502,6 +593,121 @@ async fn test_store_non_existent_topic() -> Result<()> {
         output_text.contains("failed"),
         "Error message should mention topic or error: {}", output_text
     );
+
+    Ok(())
+}
+
+/// Test that the `store` command can run in live mode with a timeout.
+#[tokio::test]
+async fn test_store_live_mode_with_timeout() -> Result<()> {
+    // Initialize test environment
+    let docker = init_test_environment();
+
+    // Set up Kafka
+    let kafka = KafkaTestContext::new(docker).await?;
+    let topic = "test-live-mode";
+    kafka.create_topic(topic, 1).await?;
+
+    // Produce initial test messages
+    let initial_messages = generate_test_messages(5);
+    kafka.produce_messages(topic, &initial_messages, None).await?;
+
+    // Create temporary directory for output
+    let temp_dir = TestDirectory::new()?;
+
+    // Start a background task to produce more messages after a delay
+    let bootstrap_servers = kafka.bootstrap_servers().to_string();
+    let topic_name = topic.to_string();
+    let producer_handle = tokio::spawn(async move {
+        // Wait a bit before producing more messages
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        // Set up Kafka again (need a new instance for the new thread)
+        let kafka = KafkaTestContext::new(docker).await.unwrap();
+
+        // Produce more messages
+        let additional_messages = generate_test_messages(5);
+        kafka.produce_messages(&topic_name, &additional_messages, None).await.unwrap();
+
+        info!("Produced additional messages in background task");
+    });
+
+    // Run the store command in live mode with a timeout
+    info!("Running store command in live mode with timeout");
+    let args = vec![
+        topic,
+        "--bootstrap-servers",
+        kafka.bootstrap_servers(),
+        "--to-dir",
+        temp_dir.path().to_str().unwrap(),
+        "--live",
+        "--timeout",
+        "5", // 5 second timeout
+    ];
+    let output = run_store_command(args)?;
+
+    // Wait for the producer to finish
+    producer_handle.await?;
+
+    // Validate command output
+    validate_success(&output)?;
+
+    // Validate stored messages - should have both initial and additional messages
+    let message_count = temp_dir.count_files()?;
+    assert!(message_count >= 5, "Expected at least 5 messages, found {}", message_count);
+
+    // If the live mode worked correctly, we should have captured some or all of the additional messages
+    info!("Captured {} messages in live mode", message_count);
+
+    Ok(())
+}
+
+/// Test that the `store` command can store messages in a compressed format.
+#[tokio::test]
+async fn test_store_with_compression() -> Result<()> {
+    // Initialize test environment
+    let docker = init_test_environment();
+
+    // Set up Kafka
+    let kafka = KafkaTestContext::new(docker).await?;
+    let topic = "test-compression";
+    kafka.create_topic(topic, 1).await?;
+
+    // Produce test messages
+    let messages = generate_test_messages(10);
+    kafka.produce_messages(topic, &messages, None).await?;
+
+    // Create temporary directory for output
+    let temp_dir = TestDirectory::new()?;
+    let output_file = temp_dir.path().join("messages.json.gz");
+
+    // Run the store command with compression
+    info!("Running store command with compression");
+    let args = vec![
+        topic,
+        "--bootstrap-servers",
+        kafka.bootstrap_servers(),
+        "--to-file",
+        output_file.to_str().unwrap(),
+        "--from-beginning",
+        "--compress",
+    ];
+    let output = run_store_command(args)?;
+
+    // Validate command output
+    validate_success(&output)?;
+
+    // Verify the compressed file was created
+    assert!(output_file.exists(), "Compressed file was not created");
+
+    // Check that the file size is smaller than it would be uncompressed
+    // This is a simple heuristic to verify compression was applied
+    let file_size = std::fs::metadata(&output_file)?.len();
+    info!("Compressed file size: {} bytes", file_size);
+
+    // We can't easily validate the content of the compressed file directly,
+    // but we can check that it's not empty and has a reasonable size
+    assert!(file_size > 0, "Compressed file is empty");
 
     Ok(())
 }

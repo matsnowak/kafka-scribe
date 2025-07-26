@@ -6,3 +6,4 @@
 pub mod kafka_setup;
 pub mod test_data;
 pub mod cli_helpers;
+pub mod dir_helpers;

@@ -9,11 +9,13 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use tempfile::{tempdir, TempDir};
-use tracing::{debug, info};
+use tokio::time::timeout;
+use tracing::{debug, info, error};
 
 use crate::common::test_data::JsonMessage;
 
@@ -383,4 +385,109 @@ pub fn validate_stored_messages_in_file(
     }
 
     Ok(())
+}
+
+/// Wrapper for executing kafka-scribe CLI commands
+pub struct CliExecutor {
+    /// Path to the kafka-scribe binary
+    binary_path: PathBuf,
+    /// Default timeout for command execution
+    default_timeout: Duration,
+}
+
+impl CliExecutor {
+    /// Create a new CLI executor
+    pub fn new() -> Self {
+        // Find the binary in the target directory
+        let binary_path = std::env::current_dir()
+            .unwrap()
+            .join("target/debug/kscribe");
+
+        if !binary_path.exists() {
+            panic!("kscribe binary not found at {:?}. Run 'cargo build' first.", binary_path);
+        }
+
+        Self {
+            binary_path,
+            default_timeout: Duration::from_secs(30),
+        }
+    }
+
+    /// Set a custom timeout for command execution
+    pub fn with_timeout(mut self, timeout_seconds: u64) -> Self {
+        self.default_timeout = Duration::from_secs(timeout_seconds);
+        self
+    }
+
+    /// Execute a store command
+    pub async fn store(
+        &self,
+        topic: &str,
+        bootstrap_servers: &str,
+        output_dir: &Path,
+        additional_args: &[&str],
+    ) -> Result<Output> {
+        let mut args = vec!["store", topic, "--bootstrap-servers", bootstrap_servers, "--to-dir", output_dir.to_str().unwrap()];
+        args.extend_from_slice(additional_args);
+
+        self.execute(&args).await
+    }
+
+    /// Execute a replay command
+    pub async fn replay(
+        &self,
+        input_dir: &Path,
+        topic: &str,
+        bootstrap_servers: &str,
+        additional_args: &[&str],
+    ) -> Result<Output> {
+        let mut args = vec!["replay", "--from-dir", input_dir.to_str().unwrap(), "--to-topic", topic, "--bootstrap-servers", bootstrap_servers];
+        args.extend_from_slice(additional_args);
+
+        self.execute(&args).await
+    }
+
+    /// Execute a stats command
+    pub async fn stats(
+        &self,
+        input_dir: &Path,
+        additional_args: &[&str],
+    ) -> Result<Output> {
+        let mut args = vec!["stats", "--from-dir", input_dir.to_str().unwrap()];
+        args.extend_from_slice(additional_args);
+
+        self.execute(&args).await
+    }
+
+    /// Execute a raw command with timeout
+    pub async fn execute(&self, args: &[&str]) -> Result<Output> {
+        info!("Executing: {} {}", self.binary_path.display(), args.join(" "));
+        let start = Instant::now();
+
+        let cmd_future = async {
+            let output = Command::new(&self.binary_path)
+                .args(args)
+                .output()
+                .context("Failed to execute command")?;
+
+            Ok(output)
+        };
+
+        let result: Result<Output, anyhow::Error> = timeout(self.default_timeout, cmd_future).await
+            .context("Command execution timed out")?;
+
+        let elapsed = start.elapsed();
+        debug!("Command completed in {:?}", elapsed);
+
+        // Log the command output for easier debugging
+        let output = result?;
+        if !output.status.success() {
+            error!("Command failed with status: {}", output.status);
+            error!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+        } else {
+            debug!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        }
+
+        Ok(output)
+    }
 }

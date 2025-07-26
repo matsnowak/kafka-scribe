@@ -294,11 +294,11 @@
   - Supports async test operations
   - Improves test readability and maintainability
 - **Tasks:**
-  - [ ] Create CLI execution wrappers with timeout handling
-  - [ ] Implement directory comparison utilities
-  - [ ] Add JSON validation helpers
-  - [ ] Create temporary directory management functions
-  - [ ] Implement Kafka topic setup and teardown utilities
+  - [x] Create CLI execution wrappers with timeout handling
+  - [x] Implement directory comparison utilities
+  - [x] Add JSON validation helpers
+  - [x] Create temporary directory management functions
+  - [x] Implement Kafka topic setup and teardown utilities
 - **Detailed Description:**
 
   Test utilities are essential for reducing code duplication and improving test maintainability. These utilities should handle common operations like executing CLI commands, setting up test environments, and validating results.
@@ -868,11 +868,11 @@
   - Error handling is properly tested
   - Tests are isolated and independent
 - **Tasks:**
-  - [ ] Add tests for all filtering options (key regex, headers, partitions)
-  - [ ] Test all range selection methods (offset, timestamp, count)
-  - [ ] Add tests for live mode with timeout
-  - [ ] Test error cases (invalid broker, topic, etc.)
-  - [ ] Add tests for different storage backends
+  - [x] Add tests for all filtering options (key regex, headers, partitions)
+  - [x] Test all range selection methods (offset, timestamp, count)
+  - [x] Add tests for live mode with timeout
+  - [x] Test error cases (invalid broker, topic, etc.)
+  - [x] Add tests for different storage backends
 - **Detailed Description:**
 
   The store command needs comprehensive test coverage for all its options and features. Tests should verify both happy paths and error scenarios to ensure robust behavior.

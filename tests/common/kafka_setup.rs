@@ -6,17 +6,21 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
-use rdkafka::config::ClientConfig;
-use rdkafka::message::OwnedHeaders;
+use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
+use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::error::KafkaError;
+use rdkafka::message::{OwnedHeaders, Headers, BorrowedMessage};
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
+use rdkafka::Message;
 use rdkafka::util::Timeout;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use crate::common::test_data::TestMessage;
 
@@ -275,6 +279,7 @@ impl KafkaTestContext {
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", &self.bootstrap_servers)
             .set("message.timeout.ms", "5000")
+            .set_log_level(RDKafkaLogLevel::Debug)
             .create()
             .context("Failed to create producer")?;
 
@@ -288,7 +293,7 @@ impl KafkaTestContext {
             }
 
             // Add headers if present
-            if let Some(headers) = &message.headers {
+            if let Some(_headers) = &message.headers {
                 // For simplicity, we'll skip adding headers in the test
                 // This is a workaround for the OwnedHeaders API complexity
             }
@@ -301,5 +306,129 @@ impl KafkaTestContext {
 
         info!("Produced {} messages to topic: {}", messages.len(), topic);
         Ok(())
+    }
+
+    /// Generate and produce test messages
+    pub async fn generate_and_produce(
+        &self,
+        topic_name: &str,
+        count: usize,
+        seed: Option<u64>,
+    ) -> Result<Vec<TestMessage>> {
+        // Create a test data generator
+        let mut generator = crate::common::test_data::TestDataGenerator::new(seed.unwrap_or_else(|| rand::random()));
+
+        // Generate messages
+        let messages = generator.generate_message_batch(count);
+
+        // Produce messages
+        self.produce_messages(topic_name, &messages, None).await?;
+
+        Ok(messages)
+    }
+
+    /// Consume messages from a topic
+    pub async fn consume_messages(
+        &self,
+        topic_name: &str,
+        count: usize,
+        timeout_seconds: u64,
+    ) -> Result<Vec<TestMessage>> {
+        info!("Consuming up to {} messages from topic {}", count, topic_name);
+
+        let group_id = format!("test-consumer-{}", Uuid::new_v4());
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", &self.bootstrap_servers)
+            .set("group.id", &group_id)
+            .set("enable.auto.commit", "false")
+            .set("auto.offset.reset", "earliest")
+            .set("enable.partition.eof", "false")
+            .set_log_level(RDKafkaLogLevel::Debug)
+            .create()
+            .context("Failed to create Kafka consumer")?;
+
+        consumer.subscribe(&[topic_name])
+            .context("Failed to subscribe to topic")?;
+
+        let mut messages = Vec::new();
+        let start = Instant::now();
+        let timeout_duration = Duration::from_secs(timeout_seconds);
+
+        while messages.len() < count && start.elapsed() < timeout_duration {
+            let message_result = match timeout(
+                Duration::from_secs(1),
+                consumer.recv(),
+            ).await {
+                Ok(result) => result,
+                Err(_) => {
+                    // No message received after 1 second
+                    debug!("No message received after timeout");
+                    continue;
+                }
+            };
+
+            match message_result {
+                Ok(borrowed_message) => {
+                    // Convert to TestMessage
+                    let key = borrowed_message.key().map(|k| k.to_vec()).unwrap_or_default();
+                    let value = borrowed_message.payload().map(|p| p.to_vec()).unwrap_or_default();
+
+                    // For simplicity, we'll skip processing headers in the test
+                    let headers = None;
+
+                    let mut test_message = TestMessage::new(key, value, headers);
+                    if let Some(ts) = borrowed_message.timestamp().to_millis() {
+                        test_message.timestamp = ts;
+                    }
+
+                    messages.push(test_message);
+                },
+                Err(e) => {
+                    warn!("Error while consuming message: {:?}", e);
+                }
+            }
+        }
+
+        info!("Consumed {} messages from {}", messages.len(), topic_name);
+        Ok(messages)
+    }
+
+    /// Wait for Kafka to be ready
+    pub async fn wait_for_kafka_ready(&self, max_wait_seconds: u64) -> Result<()> {
+        info!("Waiting for Kafka to be ready at {}", self.bootstrap_servers);
+
+        let start = Instant::now();
+        let max_wait = Duration::from_secs(max_wait_seconds);
+        let retry_interval = Duration::from_secs(2);
+
+        while start.elapsed() < max_wait {
+            let client_result: std::result::Result<AdminClient<DefaultClientContext>, KafkaError> = 
+                ClientConfig::new()
+                    .set("bootstrap.servers", &self.bootstrap_servers)
+                    .set_log_level(RDKafkaLogLevel::Debug)
+                    .create();
+
+            match client_result {
+                Ok(client) => {
+                    // Try to fetch metadata to verify the connection
+                    match client.inner().fetch_metadata(None, Timeout::After(Duration::from_secs(5))) {
+                        Ok(_) => {
+                            info!("Kafka is ready at {} after {:?}", self.bootstrap_servers, start.elapsed());
+                            return Ok(());
+                        },
+                        Err(e) => {
+                            debug!("Kafka metadata fetch failed: {:?}", e);
+                        }
+                    }
+                },
+                Err(e) => {
+                    debug!("Failed to connect to Kafka: {:?}", e);
+                }
+            }
+
+            sleep(retry_interval).await;
+        }
+
+        Err(anyhow::anyhow!("Timed out waiting for Kafka to be ready after {:?}", max_wait))
     }
 }
