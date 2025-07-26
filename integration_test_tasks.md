@@ -1588,10 +1588,10 @@
   - Verifies data integrity through the entire pipeline
   - Tests common real-world usage patterns
 - **Tasks:**
-  - [ ] Create store-to-replay pipeline test
-  - [ ] Implement filtering and transformation workflow
-  - [ ] Test with different message formats
-  - [ ] Verify data integrity through multiple operations
+  - [x] Create store-to-replay pipeline test
+  - [x] Implement filtering and transformation workflow
+  - [x] Test with different message formats
+  - [x] Verify data integrity through multiple operations
 - **Detailed Description:**
 
   End-to-end workflow tests are essential for verifying that the different components of kafka-scribe work together correctly. These tests should simulate real-world usage patterns and verify data integrity through the entire pipeline.
