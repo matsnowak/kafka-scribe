@@ -1346,11 +1346,11 @@
   - Header modifications and key overrides are verified
   - Error handling is properly tested
 - **Tasks:**
-  - [ ] Create basic replay test with file-to-topic flow
-  - [ ] Test header addition and modification
-  - [ ] Test key overriding
-  - [ ] Implement tests for transformation scripts
-  - [ ] Add error case testing (invalid topic, format errors)
+  - [x] Create basic replay test with file-to-topic flow
+  - [x] Test header addition and modification
+  - [x] Test key overriding
+  - [x] Implement tests for transformation scripts
+  - [x] Add error case testing (invalid topic, format errors)
 - **Detailed Description:**
 
   The replay command needs comprehensive test coverage to ensure it can reliably replay messages from storage back to Kafka topics. Tests should cover all modes and options.
