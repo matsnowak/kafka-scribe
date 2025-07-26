@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 /// A test message for use in integration tests.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestMessage {
     /// The message key.
     pub key: Vec<u8>,
@@ -24,6 +24,12 @@ pub struct TestMessage {
     pub headers: Option<HashMap<String, Vec<u8>>>,
     /// The message timestamp.
     pub timestamp: i64,
+    /// The message partition.
+    pub partition: i32,
+    /// The message offset.
+    pub offset: i64,
+    /// The message topic.
+    pub topic: Option<String>,
 }
 
 /// A JSON representation of a Kafka message for validation.
@@ -52,7 +58,31 @@ impl TestMessage {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as i64,
+            partition: 0,
+            offset: 0,
+            topic: None,
         }
+    }
+    
+    /// Helper method to check if a header exists
+    pub fn has_header(&self, key: &str) -> bool {
+        self.headers.as_ref().map_or(false, |h| h.contains_key(key))
+    }
+    
+    /// Helper method to get a header value as a string
+    pub fn get_header_as_string(&self, key: &str) -> Option<String> {
+        self.headers.as_ref()
+            .and_then(|h| h.get(key))
+            .map(|v| String::from_utf8_lossy(v).to_string())
+    }
+    
+    /// Helper method to add a header
+    pub fn add_header(&mut self, key: impl AsRef<str>, value: impl AsRef<str>) {
+        let headers = self.headers.get_or_insert_with(HashMap::new);
+        headers.insert(
+            key.as_ref().to_string(),
+            value.as_ref().as_bytes().to_vec(),
+        );
     }
 
     /// Creates a new test message with a JSON value.
@@ -72,6 +102,16 @@ impl TestMessage {
             serde_json::to_vec(&value).unwrap(),
             headers_bytes,
         )
+    }
+    
+    /// Adds a header to the message and returns the message.
+    pub fn with_header(mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        let headers = self.headers.get_or_insert_with(HashMap::new);
+        headers.insert(
+            key.as_ref().to_string(),
+            value.as_ref().as_bytes().to_vec(),
+        );
+        self
     }
 }
 
@@ -295,6 +335,26 @@ impl TestDataGenerator {
         Self {
             rng: StdRng::from_entropy(),
         }
+    }
+    
+    /// Create a message with a JSON value
+    pub fn create_message_with_json_value(
+        &mut self,
+        key: impl AsRef<str>,
+        value: serde_json::Value,
+        topic: String,
+        partition: i32,
+        offset: i64,
+    ) -> TestMessage {
+        let mut message = TestMessage::new_json(key, value, None);
+        message.timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        message.topic = Some(topic);
+        message.partition = partition;
+        message.offset = offset;
+        message
     }
 
     /// Generate a JSON message with order data

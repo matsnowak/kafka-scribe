@@ -460,7 +460,7 @@ impl FixtureManager {
                     _ => None,
                 };
                 
-                // Extract partition, offset, and timestamp
+                // Extract partition, offset, timestamp, and topic
                 let partition = json.get("partition")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0) as i32;
@@ -473,6 +473,10 @@ impl FixtureManager {
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
                 
+                let topic = json.get("topic")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                
                 TestMessage {
                     key,
                     value,
@@ -480,6 +484,7 @@ impl FixtureManager {
                     partition,
                     offset,
                     timestamp,
+                    topic,
                 }
             })
             .collect();

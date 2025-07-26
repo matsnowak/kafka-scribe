@@ -92,7 +92,7 @@ async fn test_json_schema_validation() -> Result<()> {
         "id": 1,
         "name": "John Doe",
         "email": "john@example.com",
-        "timestamp": 1625097600000,
+        "timestamp": 1625097600000_i64,
         "optional_field": "optional"
     });
     
@@ -100,7 +100,7 @@ async fn test_json_schema_validation() -> Result<()> {
     let invalid_user = json!({
         "id": 2,
         "name": "Jane Smith",
-        "timestamp": 1625097600000
+        "timestamp": 1625097600000_i64
     });
     
     // Create valid order message
@@ -115,7 +115,7 @@ async fn test_json_schema_validation() -> Result<()> {
             }
         ],
         "total": 59.98,
-        "timestamp": 1625097600000
+        "timestamp": 1625097600000_i64
     });
     
     // Create invalid order message (missing total)
@@ -129,7 +129,7 @@ async fn test_json_schema_validation() -> Result<()> {
                 "price": 19.99
             }
         ],
-        "timestamp": 1625097600000
+        "timestamp": 1625097600000_i64
     });
     
     // Create messages
@@ -609,7 +609,7 @@ async fn test_schema_evolution() -> Result<()> {
         "full_name": "Bob Johnson",
         "email": "bob@example.com",
         "active": true,
-        "created_at": 1625097600000
+        "created_at": 1625097600000_i64
     });
     
     // Create messages

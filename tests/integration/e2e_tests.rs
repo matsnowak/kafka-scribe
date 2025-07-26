@@ -20,7 +20,8 @@ use super::common::cli_helpers::{
 use super::common::kafka_setup::KafkaTestContext;
 use super::common::test_data::{
     generate_test_messages, generate_binary_test_messages, 
-    generate_key_filtered_test_messages, TestDataGenerator
+    generate_key_filtered_test_messages, TestDataGenerator,
+    TestMessage
 };
 
 // Initialize test environment once
@@ -98,8 +99,13 @@ async fn test_store_to_replay_pipeline() -> Result<()> {
 
     // Verify all messages have the added header
     for message in &consumed_messages {
-        assert!(message.headers.contains_key("replayed"), "Replayed message missing 'replayed' header");
-        assert_eq!(message.headers.get("replayed"), Some(&"true".to_string()), 
+        assert!(message.headers.as_ref().map_or(false, |h| h.contains_key("replayed")), 
+            "Replayed message missing 'replayed' header");
+        
+        let header_value = message.headers.as_ref()
+            .and_then(|h| h.get("replayed"))
+            .map(|v| String::from_utf8_lossy(v).to_string());
+        assert_eq!(header_value, Some("true".to_string()), 
             "Header 'replayed' has incorrect value");
     }
 
@@ -193,9 +199,13 @@ async fn test_filtering_and_transformation_workflow() -> Result<()> {
 
     // Verify all messages have the transformed header
     for message in &consumed_messages {
-        assert!(message.headers.contains_key("transformed"), 
+        assert!(message.headers.as_ref().map_or(false, |h| h.contains_key("transformed")), 
             "Transformed message missing 'transformed' header");
-        assert_eq!(message.headers.get("transformed"), Some(&"true".to_string()), 
+        
+        let header_value = message.headers.as_ref()
+            .and_then(|h| h.get("transformed"))
+            .map(|v| String::from_utf8_lossy(v).to_string());
+        assert_eq!(header_value, Some("true".to_string()), 
             "Header 'transformed' has incorrect value");
     }
 
@@ -298,9 +308,13 @@ async fn test_different_message_formats_workflow() -> Result<()> {
 
     // Verify all messages have the added header
     for message in &consumed_messages {
-        assert!(message.headers.contains_key("source"), 
+        assert!(message.headers.as_ref().map_or(false, |h| h.contains_key("source")), 
             "Replayed message missing 'source' header");
-        assert_eq!(message.headers.get("source"), Some(&"combined".to_string()), 
+        
+        let header_value = message.headers.as_ref()
+            .and_then(|h| h.get("source"))
+            .map(|v| String::from_utf8_lossy(v).to_string());
+        assert_eq!(header_value, Some("combined".to_string()), 
             "Header 'source' has incorrect value");
     }
 
@@ -340,7 +354,7 @@ async fn test_data_integrity_through_operations() -> Result<()> {
             value.as_bytes(),
             None
         );
-        message.headers.insert("original".to_string(), "true".to_string());
+        message.add_header("original", "true");
         messages.push(message);
     }
     
@@ -401,70 +415,47 @@ async fn test_data_integrity_through_operations() -> Result<()> {
     // Verify data integrity and transformations
     for message in &final_messages {
         // Check key was overridden
-        assert_eq!(message.key, Some("final-key".as_bytes().to_vec()), 
+        assert_eq!(message.key, "final-key".as_bytes().to_vec(), 
             "Message key wasn't overridden to 'final-key'");
         
         // Check all headers are present
-        assert!(message.headers.contains_key("original"), 
+        assert!(message.headers.as_ref().map_or(false, |h| h.contains_key("original")), 
             "Message missing 'original' header");
-        assert!(message.headers.contains_key("stage"), 
+        assert!(message.headers.as_ref().map_or(false, |h| h.contains_key("stage")), 
             "Message missing 'stage' header");
-        assert!(message.headers.contains_key("processed"), 
+        assert!(message.headers.as_ref().map_or(false, |h| h.contains_key("processed")), 
             "Message missing 'processed' header");
         
-        assert_eq!(message.headers.get("original"), Some(&"true".to_string()), 
+        let original_value = message.headers.as_ref()
+            .and_then(|h| h.get("original"))
+            .map(|v| String::from_utf8_lossy(v).to_string());
+        assert_eq!(original_value, Some("true".to_string()), 
             "Header 'original' has incorrect value");
-        assert_eq!(message.headers.get("stage"), Some(&"final".to_string()), 
+            
+        let stage_value = message.headers.as_ref()
+            .and_then(|h| h.get("stage"))
+            .map(|v| String::from_utf8_lossy(v).to_string());
+        assert_eq!(stage_value, Some("final".to_string()), 
             "Header 'stage' has incorrect value");
-        assert_eq!(message.headers.get("processed"), Some(&"true".to_string()), 
+            
+        let processed_value = message.headers.as_ref()
+            .and_then(|h| h.get("processed"))
+            .map(|v| String::from_utf8_lossy(v).to_string());
+        assert_eq!(processed_value, Some("true".to_string()), 
             "Header 'processed' has incorrect value");
         
         // Check value is still valid JSON
-        if let Some(value_bytes) = &message.value {
-            let value_str = String::from_utf8_lossy(value_bytes);
-            let json_result: Result<Value, _> = serde_json::from_str(&value_str);
-            assert!(json_result.is_ok(), "Message value is not valid JSON: {}", value_str);
-            
-            // Verify JSON structure is preserved
-            let json = json_result.unwrap();
-            assert!(json.get("id").is_some(), "JSON missing 'id' field");
-            assert!(json.get("name").is_some(), "JSON missing 'name' field");
-            assert!(json.get("value").is_some(), "JSON missing 'value' field");
-            assert!(json.get("active").is_some(), "JSON missing 'active' field");
-        } else {
-            panic!("Message has no value");
-        }
+        let value_str = String::from_utf8_lossy(&message.value);
+        let json_result: Result<Value, _> = serde_json::from_str(&value_str);
+        assert!(json_result.is_ok(), "Message value is not valid JSON: {}", value_str);
+        
+        // Verify JSON structure is preserved
+        let json = json_result.unwrap();
+        assert!(json.get("id").is_some(), "JSON missing 'id' field");
+        assert!(json.get("name").is_some(), "JSON missing 'name' field");
+        assert!(json.get("value").is_some(), "JSON missing 'value' field");
+        assert!(json.get("active").is_some(), "JSON missing 'active' field");
     }
 
     Ok(())
-}
-
-// Helper struct for test messages
-struct TestMessage {
-    key: Option<Vec<u8>>,
-    value: Option<Vec<u8>>,
-    headers: HashMap<String, String>,
-    topic: String,
-    partition: i32,
-    offset: i64,
-}
-
-impl TestMessage {
-    fn new(key: impl AsRef<[u8]>, value: impl AsRef<[u8]>, headers: Option<HashMap<String, Vec<u8>>>) -> Self {
-        let mut header_map = HashMap::new();
-        if let Some(headers) = headers {
-            for (k, v) in headers {
-                header_map.insert(k, String::from_utf8_lossy(&v).to_string());
-            }
-        }
-        
-        Self {
-            key: Some(key.as_ref().to_vec()),
-            value: Some(value.as_ref().to_vec()),
-            headers: header_map,
-            topic: "".to_string(),
-            partition: 0,
-            offset: 0,
-        }
-    }
 }
