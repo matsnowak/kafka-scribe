@@ -1560,7 +1560,7 @@
 
       // Create a transformation script
       let script_path = temp_dir.path().join("transform.js");
-      let script_content = r#
+      let script_content = r#"
 
 ### Task 6: Implement Stats Command Tests
 - **ID:** T6
@@ -1572,10 +1572,10 @@
   - Works with different storage backends
   - Handles edge cases (empty stores, very large messages)
 - **Tasks:**
-  - [ ] Test basic statistics generation
-  - [ ] Verify all output formats (text, JSON, CSV)
-  - [ ] Test with different storage backends
-  - [ ] Add edge case tests
+  - [x] Test basic statistics generation
+  - [x] Verify all output formats (text, JSON, CSV)
+  - [x] Test with different storage backends
+  - [x] Add edge case tests
 
 ## Priority 3: Advanced Test Scenarios
 
