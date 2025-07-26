@@ -1035,10 +1035,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "clap",
  "clap_complete",
  "dialoguer",
  "dirs",
+ "hex",
  "indicatif",
  "mockall",
  "proptest",

@@ -1,0 +1,92 @@
+TEST FIXTURE MANAGEMENT SYSTEM
+==============================
+
+This document describes the fixture management system for kafka-scribe integration tests.
+
+OVERVIEW
+--------
+
+The fixture management system provides a comprehensive solution for managing test fixtures and test data. It supports:
+
+1. Versioned test data - Test data is versioned using semantic versioning (major.minor.patch)
+2. Organized and documented fixtures - Fixtures include metadata and are organized in a directory structure
+3. Automated data generation - Different types of test data can be generated for various scenarios
+4. Support for different test scenarios - Basic, filtered, error, high volume, and custom scenarios
+5. Cleanup utilities - Temporary directories are automatically cleaned up
+
+DIRECTORY STRUCTURE
+------------------
+
+When using the FixtureManager, fixture directories will be created with the following structure:
+
+fixtures/
+└── <fixture-name>/          # Name of the fixture
+    ├── latest/              # Symlink to the latest version
+    └── <version>/           # Version directory (e.g., "1.0.0")
+        ├── metadata.json    # Fixture metadata
+        ├── all_messages.json # Combined file with all messages
+        └── messages/        # Directory containing individual message files
+            ├── message-00000.json
+            ├── message-00001.json
+            └── ...
+
+FIXTURE MANAGER FEATURES
+-----------------------
+
+1. Creating a Fixture Manager
+   - Create with default fixtures directory
+   - Create with a specific seed for reproducible data
+
+2. Creating a Fixture
+   - Specify version information (major, minor, patch, description)
+   - Add tags for categorization
+   - Include custom properties
+   - Generate test messages for different scenarios
+
+3. Loading a Fixture
+   - Load the latest version of a fixture
+   - Load a specific version of a fixture
+   - Load fixture metadata
+
+4. Listing Fixtures and Versions
+   - List all available fixtures
+   - List all versions of a fixture
+
+5. Temporary Directories
+   - Create temporary directories for tests
+   - Automatically clean up temporary directories
+
+SCENARIO TYPES
+-------------
+
+The FixtureManager supports different scenario types for generating test data:
+
+1. Basic - Simple messages with standard structure
+2. Filtered - Messages with specific key patterns for testing filtering
+3. Error - Messages with potential error conditions (invalid UTF-8, large payloads)
+4. HighVolume - Large number of messages for performance testing
+5. Custom - Messages with custom key patterns
+
+BEST PRACTICES
+-------------
+
+1. Version Your Fixtures - Always use semantic versioning for fixtures to track changes
+2. Document Your Fixtures - Add descriptive metadata to fixtures to explain their purpose
+3. Use Tags - Tag fixtures to categorize them and make them easier to find
+4. Clean Up - Always clean up temporary directories after tests
+5. Use Specific Seeds - For reproducible tests, use specific seeds when creating fixture managers
+6. Choose Appropriate Scenarios - Select the scenario type that best matches your test requirements
+
+IMPLEMENTATION DETAILS
+--------------------
+
+The fixture management system is implemented in the tests/common/fixture_manager.rs module. It includes:
+
+1. FixtureVersion - Struct for versioning test data
+2. FixtureMetadata - Struct for storing metadata about fixtures
+3. ScenarioType - Enum for different test scenarios
+4. FixtureManager - Main struct that provides methods for managing fixtures
+
+The FixtureManager integrates with the existing test_data.rs and dir_helpers.rs modules to provide a comprehensive solution for test data management.
+
+For detailed usage examples, refer to the inline documentation in the fixture_manager.rs file.
