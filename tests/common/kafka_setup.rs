@@ -13,7 +13,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::message::OwnedHeaders;
-use rdkafka::producer::{FutureProducer, FutureRecord};
+use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use rdkafka::util::Timeout;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
@@ -91,7 +91,12 @@ impl KafkaTestContext {
             }
         }
 
-        info!("Kafka started successfully");
+        info!("Kafka started successfully, waiting for it to initialize...");
+
+        // Wait a bit for Kafka to initialize
+        sleep(Duration::from_secs(10)).await;
+
+        info!("Continuing after initial wait");
         Ok(())
     }
 
@@ -103,15 +108,28 @@ impl KafkaTestContext {
             .set("message.timeout.ms", "5000")
             .create::<FutureProducer>();
 
-        if let Err(err) = client_result {
-            warn!("Kafka connection check failed: {}", err);
-            return false;
+        match client_result {
+            Ok(producer) => {
+                // Try to get metadata to verify connectivity
+                match producer.client().fetch_metadata(None, Duration::from_secs(5)) {
+                    Ok(_) => {
+                        debug!("Successfully connected to Kafka and fetched metadata");
+                        true
+                    }
+                    Err(err) => {
+                        warn!("Kafka metadata fetch failed: {}", err);
+                        false
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("Kafka connection check failed: {}", err);
+                false
+            }
         }
-
-        true
     }
 
-    /// Waits for Kafka to be ready by checking if we can create a producer.
+    /// Waits for Kafka to be ready by checking if we can create a producer and fetch metadata.
     async fn wait_for_kafka(bootstrap_servers: &str) -> Result<()> {
         let max_retries = 10;
         let retry_delay = Duration::from_secs(3);
@@ -125,9 +143,21 @@ impl KafkaTestContext {
                 .create::<FutureProducer>();
 
             match client_result {
-                Ok(_) => {
-                    info!("Kafka is ready");
-                    return Ok(());
+                Ok(producer) => {
+                    // Try to get metadata to verify connectivity
+                    match producer.client().fetch_metadata(None, Duration::from_secs(5)) {
+                        Ok(_) => {
+                            info!("Kafka is ready - successfully connected and fetched metadata");
+                            return Ok(());
+                        }
+                        Err(err) => {
+                            warn!("Kafka metadata fetch failed: {}", err);
+                            if i < max_retries {
+                                info!("Waiting for {} seconds before retrying", retry_delay.as_secs());
+                                sleep(retry_delay).await;
+                            }
+                        }
+                    }
                 }
                 Err(err) => {
                     warn!("Kafka not ready yet: {}", err);
