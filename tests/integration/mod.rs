@@ -6,5 +6,6 @@
 pub mod store_command_tests;
 pub mod stats_tests;
 pub mod e2e_tests;
+pub mod performance_tests;
 
 pub use integration::*;
