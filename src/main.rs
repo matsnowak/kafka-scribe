@@ -6,15 +6,14 @@ mod plugins;
 mod storage;
 mod utils;
 
-use tracing::debug;
 use anyhow::Result;
 use clap::Parser;
-use tracing::field::debug;
 use cli::{Cli, Commands};
-use tracing::Level;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing::debug;
+use tracing::field::debug;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> Result<()> {

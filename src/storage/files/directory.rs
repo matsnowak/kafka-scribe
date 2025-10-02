@@ -178,12 +178,10 @@ impl StorageBackend for DirectoryStorage {
             })?;
         }
 
-        // Serialize the message to JSON
         let json = to_string_pretty(&message).map_err(|e| {
             StorageError::StoreFailed(format!("Failed to serialize message: {}", e))
         })?;
 
-        // Write the message to a file
         let mut file = fs::File::create(&path).await.map_err(|e| {
             StorageError::StoreFailed(format!("Failed to create file {}: {}", path.display(), e))
         })?;

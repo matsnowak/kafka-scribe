@@ -164,12 +164,16 @@ impl StoreCommand {
 
     pub async fn execute(&self) -> anyhow::Result<()> {
         // Validate that a destination is specified
-        if self.to_dir.is_none() && self.to_file.is_none() && self.to_db.is_none() {
+        /*if self.to_dir.is_none() && self.to_file.is_none() && self.to_db.is_none() {
             return Err(anyhow::anyhow!("No destination specified. Use --to-dir, --to-file, or --to-db"));
+        }*/
+        if self.to_dir.is_none()  {
+            return Err(anyhow::anyhow!("No destination specified. Use --to-dir"));
         }
 
         // Parse the from_offsets parameter when needed
         let partition_offsets = if self.from_offsets.is_some() {
+            unreachable!("not supported yet");
             let offsets = self.parse_from_offsets()?;
             if !self.quiet {
                 println!("Using custom partition offsets: {:?}", offsets);
@@ -181,6 +185,7 @@ impl StoreCommand {
 
         // Parse headers if specified
         let headers = if let Some(header_strings) = &self.header {
+            unreachable!("not supported yet");
             let mut headers_map = HashMap::new();
             for header_str in header_strings {
                 let parts: Vec<&str> = header_str.split('=').collect();
@@ -198,16 +203,17 @@ impl StoreCommand {
         let consumer_config = KafkaConsumerConfig {
             bootstrap_servers: self.bootstrap_servers.clone(),
             topic: self.topic.clone(),
+            // TODO: determinism needed, allow to pass group_id
             group_id: format!("kafka-scribe-{}", uuid::Uuid::new_v4()),
             from_beginning: self.from_beginning,
             from_offsets: partition_offsets,
-            from_timestamp: self.from_timestamp,
+            from_timestamp: self.from_timestamp.inspect(|_| unreachable!("not supported yet")),
             count: self.count,
-            until_offset: self.until_offset,
-            until_timestamp: self.until_timestamp,
+            until_offset: self.until_offset.inspect(|_| unreachable!("not supported yet")),
+            until_timestamp: self.until_timestamp.inspect(|_| unreachable!("not supported yet")),
             live: self.live,
-            partitions: self.partitions.clone(),
-            key_regex: self.key_regex.clone(),
+            partitions: self.partitions.clone().inspect(|_| unreachable!("not supported yet")),
+            key_regex: self.key_regex.clone().inspect(|_| unreachable!("not supported yet")),
             headers,
             batch_size: self.batch_size,
             buffer_size: self.buffer_size,
@@ -264,6 +270,7 @@ impl StoreCommand {
             let storage = DirectoryStorage::new(config);
             Arc::new(storage)
         } else if let Some(file_path) = &self.to_file {
+            unreachable!("not supported yet");
             let config = SingleFileStorageConfig {
                 file_path: PathBuf::from(file_path),
                 pretty_print: self.format == "json" && self.verbose, // Pretty print JSON if verbose
@@ -272,13 +279,13 @@ impl StoreCommand {
             let storage = SingleFileStorage::new(config);
             Arc::new(storage)
         } else if let Some(_db_conn) = &self.to_db {
+            unreachable!("not supported yet");
             // Database storage is not implemented yet
             return Err(anyhow::anyhow!("Database storage is not implemented yet"));
         } else {
             unreachable!("Destination validation should have caught this");
         };
 
-        // Initialize the storage
         storage.initialize().await.context("Failed to initialize storage")?;
 
         // Create a channel for messages
@@ -410,9 +417,6 @@ impl StoreCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
-    use std::fs;
-    use tempfile::tempdir;
     use tokio::test as async_test;
 
     #[test]
