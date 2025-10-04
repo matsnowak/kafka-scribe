@@ -316,16 +316,16 @@ impl MessageFormat for JsonHybridFormat {
                         }
                     }
                     
-                    // Serialize the modified JSON object
-                    return serde_json::to_vec(&json_obj)
+                    // Serialize the modified JSON object with pretty printing
+                    return serde_json::to_vec_pretty(&json_obj)
                         .map_err(|e| FormatError::Encoding(format!("Failed to serialize to JSON: {}", e)));
                 }
             }
         }
         
-        // Default behavior for other encoding modes
+        // Default behavior for other encoding modes with pretty printing
         let serializable = self.to_serializable(message);
-        serde_json::to_vec(&serializable)
+        serde_json::to_vec_pretty(&serializable)
             .map_err(|e| FormatError::Encoding(format!("Failed to serialize to JSON: {}", e)))
     }
 
@@ -809,16 +809,35 @@ mod tests {
                 assert_eq!(message.value.is_none(), deserialized.value.is_none(), "Value presence mismatch for {}", description);
             }
             
-            // Verify the serialized format
+            // Verify the serialized format by parsing the JSON and checking structure
             let json_str = String::from_utf8(serialized).unwrap();
+            let parsed_json: Value = serde_json::from_str(&json_str).unwrap();
             
             // Check for expected encoding patterns based on the description
             match description {
-                "JSON object" => assert!(json_str.contains("\"key\"") && json_str.contains("\"value\""), "Expected JSON object structure"),
-                "JSON array" => assert!(json_str.contains("[\"item1\"") && json_str.contains("\"item2\"]"), "Expected JSON array structure"),
-                "JSON string" => assert!(json_str.contains("\"just a string\""), "Expected JSON string"),
-                "UTF-8 text" => assert!(json_str.contains("\"plain text\""), "Expected UTF-8 text"),
-                "binary data" => assert!(json_str.contains("base64:"), "Expected base64 encoding for binary data"),
+                "JSON object" => {
+                    assert!(parsed_json["value"].is_object(), "Expected JSON object structure");
+                    assert!(parsed_json["value"].as_object().unwrap().contains_key("key"), "Expected object with 'key' property");
+                },
+                "JSON array" => {
+                    assert!(parsed_json["value"].is_array(), "Expected JSON array structure");
+                    let array = parsed_json["value"].as_array().unwrap();
+                    assert_eq!(array.len(), 2, "Expected array with 2 items");
+                    assert_eq!(array[0], "item1", "Expected first item to be 'item1'");
+                    assert_eq!(array[1], "item2", "Expected second item to be 'item2'");
+                },
+                "JSON string" => {
+                    assert!(parsed_json["value"].is_string(), "Expected JSON string");
+                    assert_eq!(parsed_json["value"].as_str().unwrap(), "just a string", "Expected string value");
+                },
+                "UTF-8 text" => {
+                    assert!(parsed_json["value"].is_string(), "Expected UTF-8 text as string");
+                    assert_eq!(parsed_json["value"].as_str().unwrap(), "plain text", "Expected 'plain text' value");
+                },
+                "binary data" => {
+                    assert!(parsed_json["value"].is_string(), "Expected base64 as string");
+                    assert!(parsed_json["value"].as_str().unwrap().starts_with("base64:"), "Expected base64 encoding for binary data");
+                },
                 _ => {}
             }
         }

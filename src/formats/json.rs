@@ -78,7 +78,7 @@ impl JsonFormat {
 #[async_trait]
 impl MessageFormat for JsonFormat {
     async fn serialize(&self, message: &KafkaMessage) -> FormatResult<Vec<u8>> {
-        serde_json::to_vec(message)
+        serde_json::to_vec_pretty(message)
             .map_err(|e| FormatError::Encoding(format!("Failed to serialize to JSON: {}", e)))
     }
 

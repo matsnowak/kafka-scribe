@@ -6,11 +6,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KafkaMessage {
     /// Message key (binary data)
-    #[serde(with = "serde_bytes_opt")]
     pub key: Option<Vec<u8>>,
 
     /// Message value/payload (binary data)
-    #[serde(with = "serde_bytes_opt")]
     pub value: Option<Vec<u8>>,
 
     /// Message headers
