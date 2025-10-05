@@ -24,7 +24,7 @@ pub enum DirectoryStorageFormat {
 
 impl Default for DirectoryStorageFormat {
     fn default() -> Self {
-        DirectoryStorageFormat::Json
+        DirectoryStorageFormat::JsonHybrid(BinaryEncoding::default())
     }
 }
 
@@ -324,7 +324,7 @@ mod tests {
             base_dir: temp_dir.path().to_path_buf(),
             create_if_missing: true,
             file_extension: "json".to_string(),
-            format: DirectoryStorageFormat::default(),
+            format: DirectoryStorageFormat::Json,
         };
 
         let storage = DirectoryStorage::new(config);
@@ -376,7 +376,7 @@ mod tests {
             base_dir: temp_dir.path().to_path_buf(),
             create_if_missing: true,
             file_extension: "json".to_string(),
-            format: DirectoryStorageFormat::default(),
+            format: DirectoryStorageFormat::Json,
         };
 
         let storage = DirectoryStorage::new(config);
@@ -511,17 +511,18 @@ mod tests {
         // Create a temporary directory for testing
         let temp_dir = tempdir().unwrap();
         
-        // Use the default format (JSON) to ensure backward compatibility
+        // Explicitly use the JSON format to ensure backward compatibility still works when selected
         let config = DirectoryStorageConfig {
             base_dir: temp_dir.path().to_path_buf(),
             create_if_missing: true,
             file_extension: "json".to_string(),
-            format: DirectoryStorageFormat::default(), // This should be Json
+            format: DirectoryStorageFormat::Json,
         };
         
-        // Verify that the default format is Json
-        assert!(matches!(config.format, DirectoryStorageFormat::Json), 
-                "Default format should be Json, got {:?}", config.format);
+        // Verify that the new default is JsonHybrid
+        let default_format = DirectoryStorageFormat::default();
+        assert!(matches!(default_format, DirectoryStorageFormat::JsonHybrid(_)),
+                "Default format should be JsonHybrid, got {:?}", default_format);
 
         let storage = DirectoryStorage::new(config);
         storage.initialize().await.unwrap();
