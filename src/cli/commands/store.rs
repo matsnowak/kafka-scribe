@@ -145,15 +145,20 @@ impl StoreCommand {
                 // Split by the equals sign
                 let parts: Vec<&str> = offset_str.split('=').collect();
                 if parts.len() != 2 {
-                    return Err(anyhow::anyhow!("Invalid format for --from-offsets. Expected 'partition=offset', got '{}'", offset_str));
+                    return Err(anyhow::anyhow!(
+                        "Invalid format for --from-offsets. Expected 'partition=offset', got '{}'",
+                        offset_str
+                    ));
                 }
 
                 // Parse partition and offset
-                let partition = parts[0].trim().parse::<i32>()
-                    .map_err(|_| anyhow::anyhow!("Invalid partition number in --from-offsets: '{}'", parts[0]))?;
+                let partition = parts[0].trim().parse::<i32>().map_err(|_| {
+                    anyhow::anyhow!("Invalid partition number in --from-offsets: '{}'", parts[0])
+                })?;
 
-                let offset = parts[1].trim().parse::<u64>()
-                    .map_err(|_| anyhow::anyhow!("Invalid offset in --from-offsets: '{}'", parts[1]))?;
+                let offset = parts[1].trim().parse::<u64>().map_err(|_| {
+                    anyhow::anyhow!("Invalid offset in --from-offsets: '{}'", parts[1])
+                })?;
 
                 offsets.insert(partition, offset);
             }
@@ -167,7 +172,7 @@ impl StoreCommand {
         /*if self.to_dir.is_none() && self.to_file.is_none() && self.to_db.is_none() {
             return Err(anyhow::anyhow!("No destination specified. Use --to-dir, --to-file, or --to-db"));
         }*/
-        if self.to_dir.is_none()  {
+        if self.to_dir.is_none() {
             return Err(anyhow::anyhow!("No destination specified. Use --to-dir"));
         }
 
@@ -190,7 +195,10 @@ impl StoreCommand {
             for header_str in header_strings {
                 let parts: Vec<&str> = header_str.split('=').collect();
                 if parts.len() != 2 {
-                    return Err(anyhow::anyhow!("Invalid format for --header. Expected 'key=value', got '{}'", header_str));
+                    return Err(anyhow::anyhow!(
+                        "Invalid format for --header. Expected 'key=value', got '{}'",
+                        header_str
+                    ));
                 }
                 headers_map.insert(parts[0].to_string(), parts[1].to_string());
             }
@@ -207,13 +215,25 @@ impl StoreCommand {
             group_id: format!("kafka-scribe-{}", uuid::Uuid::new_v4()),
             from_beginning: self.from_beginning,
             from_offsets: partition_offsets,
-            from_timestamp: self.from_timestamp.inspect(|_| unreachable!("not supported yet")),
+            from_timestamp: self
+                .from_timestamp
+                .inspect(|_| unreachable!("not supported yet")),
             count: self.count,
-            until_offset: self.until_offset.inspect(|_| unreachable!("not supported yet")),
-            until_timestamp: self.until_timestamp.inspect(|_| unreachable!("not supported yet")),
+            until_offset: self
+                .until_offset
+                .inspect(|_| unreachable!("not supported yet")),
+            until_timestamp: self
+                .until_timestamp
+                .inspect(|_| unreachable!("not supported yet")),
             live: self.live,
-            partitions: self.partitions.clone().inspect(|_| unreachable!("not supported yet")),
-            key_regex: self.key_regex.clone().inspect(|_| unreachable!("not supported yet")),
+            partitions: self
+                .partitions
+                .clone()
+                .inspect(|_| unreachable!("not supported yet")),
+            key_regex: self
+                .key_regex
+                .clone()
+                .inspect(|_| unreachable!("not supported yet")),
             headers,
             batch_size: self.batch_size,
             buffer_size: self.buffer_size,
@@ -286,14 +306,21 @@ impl StoreCommand {
             unreachable!("Destination validation should have caught this");
         };
 
-        storage.initialize().await.context("Failed to initialize storage")?;
+        storage
+            .initialize()
+            .await
+            .context("Failed to initialize storage")?;
 
         // Create a channel for messages
         let (tx, mut rx) = mpsc::channel::<KafkaMessage>(self.buffer_size as usize);
 
         // Create and initialize the Kafka consumer
-        let mut consumer = KafkaConsumer::new(consumer_config).context("Failed to create Kafka consumer")?;
-        consumer.initialize().await.context("Failed to initialize Kafka consumer")?;
+        let mut consumer =
+            KafkaConsumer::new(consumer_config).context("Failed to create Kafka consumer")?;
+        consumer
+            .initialize()
+            .await
+            .context("Failed to initialize Kafka consumer")?;
 
         // Start the consumer in a separate task
         let mut consumer_handle = tokio::spawn(async move {
@@ -306,7 +333,9 @@ impl StoreCommand {
 
         // Set up signal handling for graceful shutdown
         let mut ctrl_c = tokio::spawn(async {
-            signal::ctrl_c().await.expect("Failed to listen for ctrl-c signal");
+            signal::ctrl_c()
+                .await
+                .expect("Failed to listen for ctrl-c signal");
         });
 
         let mut term_signal = tokio::spawn(async {
@@ -386,7 +415,10 @@ impl StoreCommand {
         let consumer_count = match consumer_result {
             Some(Ok(count)) => count.context("Consumer task failed")?,
             Some(Err(e)) => return Err(anyhow::anyhow!("Consumer task failed: {:?}", e)),
-            None => consumer_handle.await.context("Failed to join consumer task")?.context("Consumer task failed")?,
+            None => consumer_handle
+                .await
+                .context("Failed to join consumer task")?
+                .context("Consumer task failed")?,
         };
 
         // Get storage stats
@@ -407,7 +439,10 @@ impl StoreCommand {
             }
             let elapsed = start_time.elapsed().as_secs_f64();
             println!("  Elapsed time: {:.2} seconds", elapsed);
-            println!("  Average rate: {:.2} msgs/sec", message_count as f64 / elapsed);
+            println!(
+                "  Average rate: {:.2} msgs/sec",
+                message_count as f64 / elapsed
+            );
         }
 
         Ok(())
@@ -425,7 +460,11 @@ mod tests {
         let cmd = StoreCommand {
             topic: "test-topic".to_string(),
             bootstrap_servers: "localhost:9092".to_string(),
-            from_offsets: Some(vec!["0=1000".to_string(), "1=500".to_string(), "2=750".to_string()]),
+            from_offsets: Some(vec![
+                "0=1000".to_string(),
+                "1=500".to_string(),
+                "2=750".to_string(),
+            ]),
             // Set default values for other required fields
             to_dir: None,
             to_file: None,

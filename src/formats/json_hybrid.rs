@@ -8,17 +8,17 @@ use crate::core::errors::{FormatError, FormatResult};
 use crate::core::format::MessageFormat;
 use crate::core::models::KafkaMessage;
 use async_trait::async_trait;
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
-use base64::{Engine as _, engine::general_purpose};
 
 /// Configuration for how binary data should be encoded in JSON
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryEncoding {
     /// Always use base64 encoding (preserves all binary data)
     Base64,
-    /// Try UTF-8 first, fallback to base64 with prefix
+    /// Try UTF-8 first, fallback to base64 with a prefix
     Utf8WithFallback,
     /// Force UTF-8 conversion (may lose data for non-UTF-8 bytes)
     ForceUtf8,
@@ -28,7 +28,7 @@ pub enum BinaryEncoding {
 
 impl Default for BinaryEncoding {
     fn default() -> Self {
-        BinaryEncoding::Utf8WithFallback
+        BinaryEncoding::JsonValue
     }
 }
 
@@ -72,10 +72,6 @@ impl Default for BinaryEncoding {
 pub struct JsonHybridFormat {
     /// How to handle binary data in JSON serialization
     pub binary_encoding: BinaryEncoding,
-    
-    /// Cache for original JSON bytes (used only for JsonValue encoding)
-    /// This is used to preserve the original formatting of JSON values
-    original_json_cache: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl Default for JsonHybridFormat {
@@ -105,7 +101,6 @@ impl JsonHybridFormat {
     pub fn new() -> Self {
         Self {
             binary_encoding: BinaryEncoding::default(),
-            original_json_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -121,7 +116,6 @@ impl JsonHybridFormat {
     pub fn with_encoding(encoding: BinaryEncoding) -> Self {
         Self {
             binary_encoding: encoding,
-            original_json_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -136,28 +130,24 @@ impl JsonHybridFormat {
     /// A JSON Value representation of the data
     fn bytes_to_value(&self, data: &[u8]) -> Value {
         match self.binary_encoding {
-            BinaryEncoding::Base64 => {
-                Value::String(general_purpose::STANDARD.encode(data))
-            }
-            BinaryEncoding::Utf8WithFallback => {
-                match std::str::from_utf8(data) {
-                    Ok(s) => Value::String(s.to_string()),
-                    Err(_) => Value::String(format!("base64:{}", general_purpose::STANDARD.encode(data))),
+            BinaryEncoding::Base64 => Value::String(general_purpose::STANDARD.encode(data)),
+            BinaryEncoding::Utf8WithFallback => match std::str::from_utf8(data) {
+                Ok(s) => Value::String(s.into()),
+                Err(_) => {
+                    Value::String(format!("base64:{}", general_purpose::STANDARD.encode(data)))
                 }
-            }
-            BinaryEncoding::ForceUtf8 => {
-                Value::String(String::from_utf8_lossy(data).to_string())
-            }
+            },
+            BinaryEncoding::ForceUtf8 => Value::String(String::from_utf8_lossy(data).to_string()),
             BinaryEncoding::JsonValue => {
-                // First try to parse as JSON
+                // First, try to parse as JSON
                 if let Ok(json_value) = serde_json::from_slice::<Value>(data) {
                     // Return the parsed JSON value directly
                     json_value
                 } else if let Ok(s) = std::str::from_utf8(data) {
                     // If not valid JSON but valid UTF-8, store as string
-                    Value::String(s.to_string())
+                    Value::String(s.into())
                 } else {
-                    // If not valid UTF-8, use base64 with prefix
+                    // If not valid UTF-8, use base64 with a prefix
                     Value::String(format!("base64:{}", general_purpose::STANDARD.encode(data)))
                 }
             }
@@ -175,41 +165,42 @@ impl JsonHybridFormat {
     /// A Result containing the byte vector or a FormatError
     fn value_to_bytes(&self, value: &Value) -> FormatResult<Vec<u8>> {
         match self.binary_encoding {
-            BinaryEncoding::Base64 => {
-                match value {
-                    Value::String(s) => {
-                        general_purpose::STANDARD.decode(s)
-                            .map_err(|e| FormatError::Decoding(format!("Invalid base64 data: {}", e)))
+            BinaryEncoding::Base64 => match value {
+                Value::String(s) => general_purpose::STANDARD
+                    .decode(s)
+                    .map_err(|e| FormatError::Decoding(format!("Invalid base64 data: {}", e))),
+                _ => Err(FormatError::Decoding(
+                    "Expected string value for base64 decoding".to_string(),
+                )),
+            },
+            BinaryEncoding::Utf8WithFallback => match value {
+                Value::String(s) => {
+                    if let Some(encoded) = s.strip_prefix("base64:") {
+                        general_purpose::STANDARD.decode(encoded).map_err(|e| {
+                            FormatError::Decoding(format!("Invalid base64 data: {}", e))
+                        })
+                    } else {
+                        Ok(s.as_bytes().to_vec())
                     }
-                    _ => Err(FormatError::Decoding("Expected string value for base64 decoding".to_string()))
                 }
-            }
-            BinaryEncoding::Utf8WithFallback => {
-                match value {
-                    Value::String(s) => {
-                        if let Some(encoded) = s.strip_prefix("base64:") {
-                            general_purpose::STANDARD.decode(encoded)
-                                .map_err(|e| FormatError::Decoding(format!("Invalid base64 data: {}", e)))
-                        } else {
-                            Ok(s.as_bytes().to_vec())
-                        }
-                    }
-                    _ => Err(FormatError::Decoding("Expected string value for UTF-8 decoding".to_string()))
-                }
-            }
-            BinaryEncoding::ForceUtf8 => {
-                match value {
-                    Value::String(s) => Ok(s.as_bytes().to_vec()),
-                    _ => Err(FormatError::Decoding("Expected string value for UTF-8 decoding".to_string()))
-                }
-            }
+                _ => Err(FormatError::Decoding(
+                    "Expected string value for UTF-8 decoding".to_string(),
+                )),
+            },
+            BinaryEncoding::ForceUtf8 => match value {
+                Value::String(s) => Ok(s.as_bytes().to_vec()),
+                _ => Err(FormatError::Decoding(
+                    "Expected string value for UTF-8 decoding".to_string(),
+                )),
+            },
             BinaryEncoding::JsonValue => {
                 match value {
                     Value::String(s) => {
                         if let Some(encoded) = s.strip_prefix("base64:") {
                             // Decode base64
-                            general_purpose::STANDARD.decode(encoded)
-                                .map_err(|e| FormatError::Decoding(format!("Invalid base64 data: {}", e)))
+                            general_purpose::STANDARD.decode(encoded).map_err(|e| {
+                                FormatError::Decoding(format!("Invalid base64 data: {}", e))
+                            })
                         } else {
                             // Regular string
                             Ok(s.as_bytes().to_vec())
@@ -217,8 +208,9 @@ impl JsonHybridFormat {
                     }
                     _ => {
                         // Any other JSON value (object, array, etc.) - serialize back to JSON bytes
-                        serde_json::to_vec(value)
-                            .map_err(|e| FormatError::Encoding(format!("Failed to serialize JSON value: {}", e)))
+                        serde_json::to_vec(value).map_err(|e| {
+                            FormatError::Encoding(format!("Failed to serialize JSON value: {}", e))
+                        })
                     }
                 }
             }
@@ -255,7 +247,10 @@ impl JsonHybridFormat {
     /// # Returns
     ///
     /// A Result containing KafkaMessage or FormatError
-    fn from_serializable(&self, serializable: SerializableKafkaMessage) -> FormatResult<KafkaMessage> {
+    fn from_serializable(
+        &self,
+        serializable: SerializableKafkaMessage,
+    ) -> FormatResult<KafkaMessage> {
         let key = match serializable.key {
             Some(k) => Some(self.value_to_bytes(&k)?),
             None => None,
@@ -303,26 +298,28 @@ impl MessageFormat for JsonHybridFormat {
                 if serde_json::from_slice::<Value>(value).is_ok() {
                     // Create a SerializableKafkaMessage with the value field set to null
                     // We'll handle the value specially in the serialization
-                    let mut serializable = self.to_serializable(message);
-                    
+                    let serializable = self.to_serializable(message);
+
                     // Serialize to a JSON object
-                    let mut json_obj = serde_json::to_value(serializable)
-                        .map_err(|e| FormatError::Encoding(format!("Failed to serialize to JSON: {}", e)))?;
-                    
+                    let mut json_obj = serde_json::to_value(serializable).map_err(|e| {
+                        FormatError::Encoding(format!("Failed to serialize to JSON: {}", e))
+                    })?;
+
                     // If the value is valid JSON, parse it and insert it directly into the output
                     if let Value::Object(ref mut obj) = json_obj {
                         if let Ok(parsed_value) = serde_json::from_slice::<Value>(value) {
                             obj.insert("value".to_string(), parsed_value);
                         }
                     }
-                    
+
                     // Serialize the modified JSON object with pretty printing
-                    return serde_json::to_vec_pretty(&json_obj)
-                        .map_err(|e| FormatError::Encoding(format!("Failed to serialize to JSON: {}", e)));
+                    return serde_json::to_vec_pretty(&json_obj).map_err(|e| {
+                        FormatError::Encoding(format!("Failed to serialize to JSON: {}", e))
+                    });
                 }
             }
         }
-        
+
         // Default behavior for other encoding modes with pretty printing
         let serializable = self.to_serializable(message);
         serde_json::to_vec_pretty(&serializable)
@@ -330,14 +327,15 @@ impl MessageFormat for JsonHybridFormat {
     }
 
     async fn deserialize(&self, data: &[u8]) -> FormatResult<KafkaMessage> {
-        // First validate that the data is valid JSON
+        // First, validate that the data is valid JSON
         if let Err(e) = self.validate_json(data) {
             return Err(e);
         }
 
         // Deserialize into SerializableKafkaMessage
-        let serializable: SerializableKafkaMessage = serde_json::from_slice(data)
-            .map_err(|e| FormatError::Decoding(format!("Failed to deserialize from JSON: {}", e)))?;
+        let serializable: SerializableKafkaMessage = serde_json::from_slice(data).map_err(|e| {
+            FormatError::Decoding(format!("Failed to deserialize from JSON: {}", e))
+        })?;
 
         // Convert back to KafkaMessage
         self.from_serializable(serializable)
@@ -349,42 +347,6 @@ impl MessageFormat for JsonHybridFormat {
 
     fn supports_schema(&self) -> bool {
         true
-    }
-
-    async fn validate_schema(&self, message: &KafkaMessage, schema: &str) -> FormatResult<()> {
-        // Parse the schema
-        let schema_value = serde_json::from_str::<Value>(schema)
-            .map_err(|e| FormatError::Schema(format!("Invalid JSON schema: {}", e)))?;
-
-        // Convert message to serializable format and then to JSON value
-        let serializable = self.to_serializable(message);
-        let message_value = serde_json::to_value(serializable)
-            .map_err(|e| FormatError::Encoding(format!("Failed to convert message to JSON value: {}", e)))?;
-
-        // For basic schema validation, we just check that all required fields in the schema exist in the message
-        // A more comprehensive implementation would use a proper JSON Schema validator
-        if let Value::Object(schema_obj) = &schema_value {
-            if let Some(Value::Object(required)) = schema_obj.get("required") {
-                if let Value::Object(message_obj) = &message_value {
-                    for (key, value) in required {
-                        // Check if the required field exists and is not null
-                        if !message_obj.contains_key(key) || message_obj[key].is_null() {
-                            return Err(FormatError::Schema(format!("Required field '{}' missing in message", key)));
-                        }
-
-                        // If the value in the required object is a boolean and true,
-                        // it means the field must exist and not be null
-                        if value.is_boolean() && value.as_bool().unwrap() {
-                            if !message_obj.contains_key(key) || message_obj[key].is_null() {
-                                return Err(FormatError::Schema(format!("Required field '{}' missing in message", key)));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -415,23 +377,23 @@ mod tests {
 
         let serialized = format.serialize(&message).await.unwrap();
         let json_str = String::from_utf8(serialized.clone()).unwrap();
-        
+
         println!("Serialized JSON: {}", json_str);
-        
+
         // Parse the outer JSON to inspect the structure
         let parsed: Value = serde_json::from_str(&json_str).unwrap();
-        
+
         // The key should be a string
         assert_eq!(parsed["key"], Value::String("user-123".to_string()));
-        
+
         // The value should be parsed as a JSON object, not an escaped string
         assert_eq!(parsed["value"]["name"], Value::String("John".to_string()));
         assert_eq!(parsed["value"]["age"], Value::Number(30.into()));
         assert_eq!(parsed["value"]["active"], Value::Bool(true));
-        
+
         // Verify round-trip
         let deserialized = format.deserialize(&serialized).await.unwrap();
-        
+
         // Compare messages semantically for JSON values
         assert_eq!(message.key, deserialized.key);
         assert_eq!(message.headers, deserialized.headers);
@@ -439,12 +401,14 @@ mod tests {
         assert_eq!(message.partition, deserialized.partition);
         assert_eq!(message.offset, deserialized.offset);
         assert_eq!(message.timestamp, deserialized.timestamp);
-        
+
         // For the value field, parse both as JSON and compare semantically
-        if let (Some(original_value), Some(deserialized_value)) = (&message.value, &deserialized.value) {
+        if let (Some(original_value), Some(deserialized_value)) =
+            (&message.value, &deserialized.value)
+        {
             if let (Ok(original_json), Ok(deserialized_json)) = (
                 serde_json::from_slice::<Value>(original_value),
-                serde_json::from_slice::<Value>(deserialized_value)
+                serde_json::from_slice::<Value>(deserialized_value),
             ) {
                 assert_eq!(original_json, deserialized_json);
             } else {
@@ -473,20 +437,20 @@ mod tests {
 
         let serialized = format.serialize(&message).await.unwrap();
         let json_str = String::from_utf8(serialized.clone()).unwrap();
-        
+
         // Parse the outer JSON to inspect the structure
         let parsed: Value = serde_json::from_str(&json_str).unwrap();
-        
+
         // The value should be parsed as a JSON array
         assert!(parsed["value"].is_array());
         let value_array = parsed["value"].as_array().unwrap();
         assert_eq!(value_array.len(), 2);
         assert_eq!(value_array[0]["id"], Value::Number(1.into()));
         assert_eq!(value_array[1]["name"], Value::String("Item 2".to_string()));
-        
+
         // Verify round-trip
         let deserialized = format.deserialize(&serialized).await.unwrap();
-        
+
         // Compare messages semantically for JSON values
         assert_eq!(message.key, deserialized.key);
         assert_eq!(message.headers, deserialized.headers);
@@ -494,12 +458,14 @@ mod tests {
         assert_eq!(message.partition, deserialized.partition);
         assert_eq!(message.offset, deserialized.offset);
         assert_eq!(message.timestamp, deserialized.timestamp);
-        
+
         // For the value field, parse both as JSON and compare semantically
-        if let (Some(original_value), Some(deserialized_value)) = (&message.value, &deserialized.value) {
+        if let (Some(original_value), Some(deserialized_value)) =
+            (&message.value, &deserialized.value)
+        {
             if let (Ok(original_json), Ok(deserialized_json)) = (
                 serde_json::from_slice::<Value>(original_value),
-                serde_json::from_slice::<Value>(deserialized_value)
+                serde_json::from_slice::<Value>(deserialized_value),
             ) {
                 assert_eq!(original_json, deserialized_json);
             } else {
@@ -516,7 +482,7 @@ mod tests {
     async fn test_readable_output_with_json_value() {
         let format = JsonHybridFormat::with_encoding(BinaryEncoding::JsonValue);
 
-        // Create a message with JSON object in value
+        // Create a message with a JSON object in value
         let message = KafkaMessage::new(
             Some(b"user-123".to_vec()),
             Some(br#"{"name": "John", "age": 30}"#.to_vec()),
@@ -527,7 +493,7 @@ mod tests {
 
         let serialized = format.serialize(&message).await.unwrap();
         let json_str = String::from_utf8(serialized).unwrap();
-        
+
         // The JSON should contain the key as a readable string
         assert!(json_str.contains("\"user-123\""));
         // The value should be an actual JSON object, not an escaped string
@@ -536,7 +502,7 @@ mod tests {
         // Should not contain escaped quotes or base64
         assert!(!json_str.contains("\\\""));
         assert!(!json_str.contains("base64:"));
-        
+
         // Should be parseable as JSON
         let parsed: Value = serde_json::from_str(&json_str).unwrap();
         assert!(parsed["value"].is_object());
@@ -550,7 +516,7 @@ mod tests {
 
         // Test Base64 encoding
         let base64_format = JsonHybridFormat::with_encoding(BinaryEncoding::Base64);
-        
+
         let message = KafkaMessage::new(
             Some(utf8_data.to_vec()),
             Some(binary_data.clone()),
@@ -564,8 +530,9 @@ mod tests {
         assert_eq!(message, deserialized);
 
         // Test UTF-8 with fallback encoding
-        let utf8_fallback_format = JsonHybridFormat::with_encoding(BinaryEncoding::Utf8WithFallback);
-        
+        let utf8_fallback_format =
+            JsonHybridFormat::with_encoding(BinaryEncoding::Utf8WithFallback);
+
         let text_message = KafkaMessage::new(
             Some(utf8_data.to_vec()),
             Some(b"UTF-8 text value".to_vec()),
@@ -587,13 +554,16 @@ mod tests {
             100,
         );
 
-        let serialized = utf8_fallback_format.serialize(&binary_message).await.unwrap();
+        let serialized = utf8_fallback_format
+            .serialize(&binary_message)
+            .await
+            .unwrap();
         let deserialized = utf8_fallback_format.deserialize(&serialized).await.unwrap();
         assert_eq!(binary_message, deserialized);
 
         // Test Force UTF-8 encoding
         let force_utf8_format = JsonHybridFormat::with_encoding(BinaryEncoding::ForceUtf8);
-        
+
         let serialized = force_utf8_format.serialize(&text_message).await.unwrap();
         let deserialized = force_utf8_format.deserialize(&serialized).await.unwrap();
         assert_eq!(text_message, deserialized);
@@ -615,8 +585,8 @@ mod tests {
 
         let serialized = format.serialize(&message).await.unwrap();
         let json_str = String::from_utf8(serialized.clone()).unwrap();
-        
-        // The key should be base64 encoded with prefix
+
+        // The key should be base64 encoded with a prefix
         assert!(json_str.contains("base64:"));
         // The value should be plain text
         assert!(json_str.contains("\"text-value\""));
@@ -632,10 +602,10 @@ mod tests {
 
         // Test various UTF-8 and binary combinations
         let test_cases = vec![
-            (b"simple text".to_vec(), false), // Should be UTF-8
+            (b"simple text".to_vec(), false),            // Should be UTF-8
             (b"emoji \xF0\x9F\x98\x80".to_vec(), false), // UTF-8 emoji
-            (vec![0xFF, 0xFE, 0xFD], true), // Binary data
-            (b"mixed\xFF\xFEtext".to_vec(), true), // Mixed content
+            (vec![0xFF, 0xFE, 0xFD], true),              // Binary data
+            (b"mixed\xFF\xFEtext".to_vec(), true),       // Mixed content
         ];
 
         for (data, should_be_base64) in test_cases {
@@ -651,9 +621,15 @@ mod tests {
             let json_str = String::from_utf8(serialized.clone()).unwrap();
 
             if should_be_base64 {
-                assert!(json_str.contains("base64:"), "Expected base64 encoding for binary data");
+                assert!(
+                    json_str.contains("base64:"),
+                    "Expected base64 encoding for binary data"
+                );
             } else {
-                assert!(!json_str.contains("base64:"), "Expected UTF-8 encoding for text data");
+                assert!(
+                    !json_str.contains("base64:"),
+                    "Expected UTF-8 encoding for text data"
+                );
             }
 
             // Verify round-trip
@@ -680,45 +656,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_schema_validation() {
-        let format = JsonHybridFormat::new();
-
-        // Create a test message
-        let message = KafkaMessage::new(
-            Some(b"key".to_vec()),
-            Some(b"value".to_vec()),
-            "topic".to_string(),
-            0,
-            100,
-        );
-
-        // Define a simple schema that requires a "timestamp" field
-        let schema = r#"{"required": {"timestamp": true}}"#;
-
-        // Validation should fail because the message doesn't have a timestamp
-        let result = format.validate_schema(&message, schema).await;
-        assert!(result.is_err());
-
-        // Add a timestamp and try again
-        let message_with_timestamp = KafkaMessage {
-            timestamp: Some(1640995200000),
-            ..message.clone()
-        };
-        let result = format.validate_schema(&message_with_timestamp, schema).await;
-        assert!(result.is_ok());
-
-        // Test with invalid schema
-        let invalid_schema = r#"{not a valid schema}"#;
-        let result = format.validate_schema(&message, invalid_schema).await;
-        assert!(result.is_err());
-        if let Err(FormatError::Schema(msg)) = result {
-            assert!(msg.contains("Invalid JSON schema"));
-        } else {
-            panic!("Expected Schema error");
-        }
-    }
-
-    #[tokio::test]
     async fn test_format_name() {
         let format = JsonHybridFormat::new();
         assert_eq!(format.format_name(), "json-hybrid");
@@ -732,7 +669,7 @@ mod tests {
         let test_cases = vec![
             // Valid JSON object -> should parse as JSON
             (br#"{"key": "value"}"#.to_vec(), "JSON object"),
-            // Valid JSON array -> should parse as JSON  
+            // Valid JSON array -> should parse as JSON
             (br#"["item1", "item2"]"#.to_vec(), "JSON array"),
             // Valid JSON primitive -> should parse as JSON
             (br#""just a string""#.to_vec(), "JSON string"),
@@ -753,91 +690,177 @@ mod tests {
 
             let serialized = format.serialize(&message).await.unwrap();
             let deserialized = format.deserialize(&serialized).await.unwrap();
-            
+
             // Compare messages semantically for JSON values
-            assert_eq!(message.key, deserialized.key, "Key mismatch for {}", description);
-            assert_eq!(message.headers, deserialized.headers, "Headers mismatch for {}", description);
-            assert_eq!(message.topic, deserialized.topic, "Topic mismatch for {}", description);
-            assert_eq!(message.partition, deserialized.partition, "Partition mismatch for {}", description);
-            assert_eq!(message.offset, deserialized.offset, "Offset mismatch for {}", description);
-            assert_eq!(message.timestamp, deserialized.timestamp, "Timestamp mismatch for {}", description);
-            
+            assert_eq!(
+                message.key, deserialized.key,
+                "Key mismatch for {}",
+                description
+            );
+            assert_eq!(
+                message.headers, deserialized.headers,
+                "Headers mismatch for {}",
+                description
+            );
+            assert_eq!(
+                message.topic, deserialized.topic,
+                "Topic mismatch for {}",
+                description
+            );
+            assert_eq!(
+                message.partition, deserialized.partition,
+                "Partition mismatch for {}",
+                description
+            );
+            assert_eq!(
+                message.offset, deserialized.offset,
+                "Offset mismatch for {}",
+                description
+            );
+            assert_eq!(
+                message.timestamp, deserialized.timestamp,
+                "Timestamp mismatch for {}",
+                description
+            );
+
             // For the value field, compare based on the description
-            if let (Some(original_value), Some(deserialized_value)) = (&message.value, &deserialized.value) {
+            if let (Some(original_value), Some(deserialized_value)) =
+                (&message.value, &deserialized.value)
+            {
                 match description {
                     "JSON object" | "JSON array" => {
                         // For JSON objects and arrays, parse and compare semantically
                         if let (Ok(original_json), Ok(deserialized_json)) = (
                             serde_json::from_slice::<Value>(original_value),
-                            serde_json::from_slice::<Value>(deserialized_value)
+                            serde_json::from_slice::<Value>(deserialized_value),
                         ) {
-                            assert_eq!(original_json, deserialized_json, "JSON value mismatch for {}", description);
+                            assert_eq!(
+                                original_json, deserialized_json,
+                                "JSON value mismatch for {}",
+                                description
+                            );
                         } else {
                             // If parsing fails, compare bytes directly
-                            assert_eq!(original_value, deserialized_value, "Value bytes mismatch for {}", description);
+                            assert_eq!(
+                                original_value, deserialized_value,
+                                "Value bytes mismatch for {}",
+                                description
+                            );
                         }
-                    },
+                    }
                     "JSON string" => {
                         // For JSON strings, the original is a quoted string like "just a string"
                         // but the deserialized might be just the content without quotes
                         if let Ok(original_json) = serde_json::from_slice::<Value>(original_value) {
                             if original_json.is_string() {
                                 let original_content = original_json.as_str().unwrap();
-                                let deserialized_content = std::str::from_utf8(deserialized_value).unwrap_or("");
-                                assert_eq!(original_content, deserialized_content, "JSON string content mismatch for {}", description);
+                                let deserialized_content =
+                                    std::str::from_utf8(deserialized_value).unwrap_or("");
+                                assert_eq!(
+                                    original_content, deserialized_content,
+                                    "JSON string content mismatch for {}",
+                                    description
+                                );
                             } else {
                                 // If not a string, compare the JSON values
-                                if let Ok(deserialized_json) = serde_json::from_slice::<Value>(deserialized_value) {
-                                    assert_eq!(original_json, deserialized_json, "JSON value mismatch for {}", description);
+                                if let Ok(deserialized_json) =
+                                    serde_json::from_slice::<Value>(deserialized_value)
+                                {
+                                    assert_eq!(
+                                        original_json, deserialized_json,
+                                        "JSON value mismatch for {}",
+                                        description
+                                    );
                                 } else {
                                     // If deserialized is not valid JSON, this is unexpected
                                     panic!("Expected valid JSON for both original and deserialized in JSON string test case");
                                 }
                             }
                         } else {
-                            // If original is not valid JSON, this is unexpected
+                            // If the original is not valid JSON, this is unexpected
                             panic!("Expected valid JSON for original in JSON string test case");
                         }
-                    },
+                    }
                     _ => {
                         // For non-JSON values, compare bytes directly
-                        assert_eq!(original_value, deserialized_value, "Value bytes mismatch for {}", description);
+                        assert_eq!(
+                            original_value, deserialized_value,
+                            "Value bytes mismatch for {}",
+                            description
+                        );
                     }
                 }
             } else {
                 // If either value is None, they should both be None
-                assert_eq!(message.value.is_none(), deserialized.value.is_none(), "Value presence mismatch for {}", description);
+                assert_eq!(
+                    message.value.is_none(),
+                    deserialized.value.is_none(),
+                    "Value presence mismatch for {}",
+                    description
+                );
             }
-            
+
             // Verify the serialized format by parsing the JSON and checking structure
             let json_str = String::from_utf8(serialized).unwrap();
             let parsed_json: Value = serde_json::from_str(&json_str).unwrap();
-            
+
             // Check for expected encoding patterns based on the description
             match description {
                 "JSON object" => {
-                    assert!(parsed_json["value"].is_object(), "Expected JSON object structure");
-                    assert!(parsed_json["value"].as_object().unwrap().contains_key("key"), "Expected object with 'key' property");
-                },
+                    assert!(
+                        parsed_json["value"].is_object(),
+                        "Expected JSON object structure"
+                    );
+                    assert!(
+                        parsed_json["value"]
+                            .as_object()
+                            .unwrap()
+                            .contains_key("key"),
+                        "Expected object with 'key' property"
+                    );
+                }
                 "JSON array" => {
-                    assert!(parsed_json["value"].is_array(), "Expected JSON array structure");
+                    assert!(
+                        parsed_json["value"].is_array(),
+                        "Expected JSON array structure"
+                    );
                     let array = parsed_json["value"].as_array().unwrap();
                     assert_eq!(array.len(), 2, "Expected array with 2 items");
                     assert_eq!(array[0], "item1", "Expected first item to be 'item1'");
                     assert_eq!(array[1], "item2", "Expected second item to be 'item2'");
-                },
+                }
                 "JSON string" => {
                     assert!(parsed_json["value"].is_string(), "Expected JSON string");
-                    assert_eq!(parsed_json["value"].as_str().unwrap(), "just a string", "Expected string value");
-                },
+                    assert_eq!(
+                        parsed_json["value"].as_str().unwrap(),
+                        "just a string",
+                        "Expected string value"
+                    );
+                }
                 "UTF-8 text" => {
-                    assert!(parsed_json["value"].is_string(), "Expected UTF-8 text as string");
-                    assert_eq!(parsed_json["value"].as_str().unwrap(), "plain text", "Expected 'plain text' value");
-                },
+                    assert!(
+                        parsed_json["value"].is_string(),
+                        "Expected UTF-8 text as string"
+                    );
+                    assert_eq!(
+                        parsed_json["value"].as_str().unwrap(),
+                        "plain text",
+                        "Expected 'plain text' value"
+                    );
+                }
                 "binary data" => {
-                    assert!(parsed_json["value"].is_string(), "Expected base64 as string");
-                    assert!(parsed_json["value"].as_str().unwrap().starts_with("base64:"), "Expected base64 encoding for binary data");
-                },
+                    assert!(
+                        parsed_json["value"].is_string(),
+                        "Expected base64 as string"
+                    );
+                    assert!(
+                        parsed_json["value"]
+                            .as_str()
+                            .unwrap()
+                            .starts_with("base64:"),
+                        "Expected base64 encoding for binary data"
+                    );
+                }
                 _ => {}
             }
         }
