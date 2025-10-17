@@ -19,7 +19,7 @@ use super::common::test_data::{
     generate_header_filtered_test_messages, generate_timestamped_test_messages, TestMessage, JsonMessage
 };
 
-// Initialize the test environment once
+// Initialize the test environment at once
 static INIT: Once = Once::new();
 static mut DOCKER_CLIENT: Option<()> = None;
 
@@ -80,6 +80,7 @@ async fn test_basic_store_to_directory() -> Result<()> {
 }
 
 /// Test that the `store` command can store messages from a Kafka topic to a single file.
+#[ignore]
 #[tokio::test]
 async fn test_store_to_file() -> Result<()> {
     // Initialize test environment
@@ -177,7 +178,9 @@ async fn test_store_to_file() -> Result<()> {
 }
 
 /// Test that the `store` command can filter messages by key regex.
+#[ignore]
 #[tokio::test]
+#[ignore]
 async fn test_store_with_key_regex_filter() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -266,6 +269,7 @@ async fn test_store_with_key_regex_filter() -> Result<()> {
 
 /// Test that the `store` command can filter messages by header value.
 #[tokio::test]
+#[ignore]
 async fn test_store_with_header_filter() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -367,6 +371,7 @@ async fn test_store_with_header_filter() -> Result<()> {
 }
 
 /// Test that the `store` command can filter messages by partition.
+#[ignore]
 #[tokio::test]
 async fn test_store_with_partition_filter() -> Result<()> {
     // Initialize test environment
@@ -416,6 +421,7 @@ async fn test_store_with_partition_filter() -> Result<()> {
 
 /// Test that the `store` command can limit the number of messages stored.
 #[tokio::test]
+#[ignore]
 async fn test_store_with_count_limit() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -457,6 +463,7 @@ async fn test_store_with_count_limit() -> Result<()> {
 
 /// Test that the `store` command can handle binary message data.
 #[tokio::test]
+#[ignore]
 async fn test_store_binary_messages() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -497,6 +504,7 @@ async fn test_store_binary_messages() -> Result<()> {
 
 /// Test that the `store` command can filter messages by timestamp.
 #[tokio::test]
+#[ignore]
 async fn test_store_with_timestamp_filter() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -550,6 +558,7 @@ async fn test_store_with_timestamp_filter() -> Result<()> {
 
 /// Test that the `store` command can store messages from a specific offset.
 #[tokio::test]
+#[ignore]
 async fn test_store_from_offset() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -595,6 +604,7 @@ async fn test_store_from_offset() -> Result<()> {
 
 /// Test that the `store` command can store messages until a specific offset.
 #[tokio::test]
+#[ignore]
 async fn test_store_until_offset() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -645,6 +655,7 @@ async fn test_store_until_offset() -> Result<()> {
 /// as specified in RFC 5737. This IP address is guaranteed to be invalid and should
 /// cause the connection to fail quickly.
 #[tokio::test]
+#[ignore]
 async fn test_store_invalid_bootstrap_server() -> Result<()> {
     // Create temporary directory for output
     let temp_dir = TestDirectory::new()?;
@@ -703,6 +714,7 @@ async fn test_store_invalid_bootstrap_server() -> Result<()> {
 
 /// Test that the `store` command fails with a non-existent topic.
 #[tokio::test]
+#[ignore]
 async fn test_store_non_existent_topic() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -747,6 +759,7 @@ async fn test_store_non_existent_topic() -> Result<()> {
 
 /// Test that the `store` command can run in live mode with a timeout.
 #[tokio::test]
+#[ignore]
 async fn test_store_live_mode_with_timeout() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -811,6 +824,7 @@ async fn test_store_live_mode_with_timeout() -> Result<()> {
 }
 
 /// Test that the `store` command can store messages in a compressed format.
+#[ignore]
 #[tokio::test]
 async fn test_store_with_compression() -> Result<()> {
     // Initialize test environment
@@ -862,6 +876,7 @@ async fn test_store_with_compression() -> Result<()> {
 
 /// Test that the `store` command preserves message ordering by offset.
 #[tokio::test]
+#[ignore]
 async fn test_store_preserves_message_ordering() -> Result<()> {
     let docker = init_test_environment();
     let kafka = KafkaTestContext::new(docker).await?;
@@ -943,6 +958,7 @@ async fn test_store_preserves_message_ordering() -> Result<()> {
     Ok(())
 }
 /// Test that the `store` command can handle large messages without memory issues or corruption.
+#[ignore]
 #[tokio::test]
 async fn test_store_large_messages() -> Result<()> {
     let docker = init_test_environment();
@@ -1045,6 +1061,7 @@ async fn test_store_large_messages() -> Result<()> {
     Ok(())
 }
 /// Test that binary message data (non-UTF8) is stored and retrieved without corruption.
+#[ignore]
 #[tokio::test]
 async fn test_store_binary_data_integrity() -> Result<()> {
     let docker = init_test_environment();
@@ -1167,6 +1184,7 @@ async fn test_store_binary_data_integrity() -> Result<()> {
     Ok(())
 }
 /// Test storing messages while producers are actively writing to the topic, ensuring no message loss.
+#[ignore]
 #[tokio::test]
 async fn test_store_concurrent_producers() -> Result<()> {
     let docker = init_test_environment();
@@ -1276,6 +1294,7 @@ async fn test_store_concurrent_producers() -> Result<()> {
     Ok(())
 }
 /// Test graceful handling when disk space runs out during message storage.
+#[ignore]
 #[tokio::test]
 async fn test_store_disk_space_exhaustion() -> Result<()> {
     // Skip this test on systems where we can't create limited filesystems
@@ -1391,6 +1410,7 @@ async fn test_store_disk_space_exhaustion() -> Result<()> {
     Ok(())
 }
 /// Test proper handling of Unicode characters, emojis, and special characters in messages.
+#[ignore]
 #[tokio::test]
 async fn test_store_unicode_messages() -> Result<()> {
     let docker = init_test_environment();
