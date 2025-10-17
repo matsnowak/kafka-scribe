@@ -14,7 +14,7 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaError;
-use rdkafka::message::{OwnedHeaders, Headers, BorrowedMessage};
+use rdkafka::message::{OwnedHeaders, Headers, BorrowedMessage, Header};
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use rdkafka::Message;
 use rdkafka::util::Timeout;
@@ -293,9 +293,12 @@ impl KafkaTestContext {
             }
 
             // Add headers if present
-            if let Some(_headers) = &message.headers {
-                // For simplicity, we'll skip adding headers in the test
-                // This is a workaround for the OwnedHeaders API complexity
+            if let Some(headers) = &message.headers {
+                let mut owned = OwnedHeaders::new();
+                for (k, v) in headers {
+                    owned = owned.insert(Header { key: k.as_str(), value: Some(v.as_slice()) });
+                }
+                record = record.headers(owned);
             }
 
             match producer.send(record, Timeout::After(DEFAULT_TIMEOUT)).await {
