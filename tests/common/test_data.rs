@@ -126,6 +126,9 @@ pub fn random_string(length: usize) -> String {
 
 /// Generates a set of test messages with different characteristics.
 pub fn generate_test_messages(count: usize) -> Vec<TestMessage> {
+    // Use a fixed base timestamp to ensure determinism across test runs
+    let base_ts: i64 = 1_700_000_000_000;
+
     let mut messages = Vec::with_capacity(count);
 
     for i in 0..count {
@@ -133,12 +136,11 @@ pub fn generate_test_messages(count: usize) -> Vec<TestMessage> {
         let value = json!({
             "id": i,
             "name": format!("Test Message {}", i),
-            "timestamp": SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
+            // Deterministic per-message timestamp in the payload
+            "timestamp": base_ts + i as i64,
             "data": {
-                "field1": random_string(10),
+                // Deterministic content (avoid RNG)
+                "field1": format!("field1_{:02}", i),
                 "field2": i % 5,
                 "field3": i % 2 == 0,
             }

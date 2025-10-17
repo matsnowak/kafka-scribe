@@ -62,6 +62,7 @@ chrono = "0.4"
 hex = "0.4"
 log = "0.4"
 env_logger = "0.10"
+insta = { version = "1", features = ["json"] }
 
 [features]
 default = ["database"]

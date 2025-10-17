@@ -11,7 +11,7 @@ use tokio::runtime::Runtime;
 use tracing::{debug, info};
 
 use super::common::cli_helpers::{
-    run_store_command, validate_stored_messages, validate_stored_messages_in_file, validate_success, TestDirectory,
+    run_store_command, validate_stored_messages, validate_stored_messages_in_file, validate_success, TestDirectory, build_normalized_dir_json, write_normalized_dir_file,
 };
 use super::common::kafka_setup::KafkaTestContext;
 use super::common::test_data::{
@@ -73,8 +73,17 @@ async fn test_basic_store_to_directory() -> Result<()> {
     // Validate command output
     validate_success(&output)?;
 
-    // Validate stored messages
+    // Validate stored messages (basic structural check)
     validate_stored_messages(&temp_dir, 10, |_| Ok(()))?;
+
+    // Build a normalized, deterministic JSON of the entire stored directory
+    let normalized = build_normalized_dir_json(&temp_dir)?;
+
+    // Persist normalized content next to the stored files for debugging/inspection
+    let _normalized_path = write_normalized_dir_file(&temp_dir, "normalized.json")?;
+
+    // Snapshot test to ensure directory contents match expected messages without changes
+    insta::assert_json_snapshot!("basic_store_to_directory_normalized", normalized);
 
     Ok(())
 }

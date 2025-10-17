@@ -19,6 +19,94 @@ use tracing::{debug, info, error};
 
 use crate::common::test_data::JsonMessage;
 
+/// Build a deterministic, normalized JSON representation of all messages stored in the directory.
+pub fn build_normalized_dir_json(dir: &TestDirectory) -> Result<serde_json::Value> {
+    use std::fs;
+    use std::io::Read;
+
+    fn normalize_timestamps(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (k, v) in map.iter_mut() {
+                    if k == "timestamp" {
+                        *v = serde_json::Value::Number(serde_json::Number::from(1_700_000_000_000u64));
+                    } else {
+                        normalize_timestamps(v);
+                    }
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr.iter_mut() {
+                    normalize_timestamps(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let root = dir.path().to_path_buf();
+    let mut records: Vec<serde_json::Value> = Vec::new();
+
+    fn walk(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        out: &mut Vec<serde_json::Value>,
+    ) -> Result<()> {
+        for entry in fs::read_dir(current).with_context(|| format!("Failed to read directory: {}", current.display()))? {
+            let entry = entry.with_context(|| "Failed to read directory entry")?;
+            let path = entry.path();
+            let meta = entry.metadata().with_context(|| format!("Failed to get metadata for {}", path.display()))?;
+
+            if meta.is_dir() {
+                walk(root, &path, out)?;
+            } else if meta.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+                // Read entire JSON file
+                let mut file = File::open(&path).with_context(|| format!("Failed to open file: {}", path.display()))?;
+                let mut content = String::new();
+                file.read_to_string(&mut content).with_context(|| format!("Failed to read file: {}", path.display()))?;
+                let mut json: serde_json::Value = serde_json::from_str(&content)
+                    .with_context(|| format!("Failed to parse JSON from file: {}", path.display()))?;
+
+                // Normalize timestamps anywhere in the JSON
+                normalize_timestamps(&mut json);
+
+                // Relative file path
+                let rel = path.strip_prefix(root).unwrap_or(&path);
+                let file_path = rel.to_string_lossy().replace('\\', "/");
+
+                // Build record: { path, content }
+                let record = serde_json::json!({
+                    "path": file_path,
+                    "content": json,
+                });
+
+                out.push(record);
+            }
+        }
+        Ok(())
+    }
+
+    walk(&root, &root, &mut records)?;
+
+    // Sort strictly by path
+    records.sort_by(|a, b| {
+        let pa = a.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let pb = b.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        pa.cmp(pb)
+    });
+
+    Ok(serde_json::Value::Array(records))
+}
+
+/// Write the normalized directory content to a single file in pretty JSON.
+pub fn write_normalized_dir_file(dir: &TestDirectory, filename: &str) -> Result<std::path::PathBuf> {
+    let value = build_normalized_dir_json(dir)?;
+    let content = serde_json::to_string_pretty(&value)?;
+    let path = dir.path().join(filename);
+    std::fs::write(&path, content)?;
+    Ok(path)
+}
+
 /// A wrapper around a temporary directory for testing.
 pub struct TestDirectory {
     /// The temporary directory.
