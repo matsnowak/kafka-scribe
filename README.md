@@ -62,6 +62,27 @@ cargo run -- replay --help
 cargo run -- stats --help
 ```
 
+### Local Kafka Environment
+
+For development and testing, a Docker Compose configuration is provided in `tests/fixtures/docker-compose.yml`:
+
+```bash
+# Start the Kafka environment
+cd tests/fixtures
+docker-compose up -d
+
+# Access Kafka UI
+# Open http://localhost:8080 in your browser
+
+# Stop the Kafka environment
+docker-compose down
+```
+
+The Docker Compose setup includes:
+- Zookeeper
+- Kafka broker
+- Kafka UI - a web interface for managing and monitoring Kafka
+
 ## Documentation
 
 - [Design Document](docs/design-document.md) - Complete technical specification

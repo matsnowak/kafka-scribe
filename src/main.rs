@@ -9,12 +9,20 @@ mod utils;
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
-use tracing::Level;
+use tracing::debug;
+use tracing::field::debug;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .try_init()?;
+    tracing::debug!("Starting kafka-scribe debug");
 
     // Parse command line arguments
     let cli = Cli::parse();

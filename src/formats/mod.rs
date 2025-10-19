@@ -4,5 +4,7 @@
 //! message formats such as JSON, Avro, Protobuf, Binary, and String.
 
 pub mod json;
+pub mod json_hybrid;
 
 pub use json::JsonFormat;
+pub use json_hybrid::{JsonHybridFormat, BinaryEncoding};

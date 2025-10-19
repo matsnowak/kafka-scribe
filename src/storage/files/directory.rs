@@ -8,8 +8,25 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use crate::core::errors::{StorageError, StorageResult};
+use crate::core::format::MessageFormat;
 use crate::core::models::{KafkaMessage, StorageStats};
+use crate::formats::{JsonFormat, JsonHybridFormat, BinaryEncoding};
 use crate::storage::StorageBackend;
+
+/// Format type for directory storage
+#[derive(Debug, Clone, PartialEq)]
+pub enum DirectoryStorageFormat {
+    /// Standard JSON format
+    Json,
+    /// JSON hybrid format with configurable binary encoding
+    JsonHybrid(BinaryEncoding),
+}
+
+impl Default for DirectoryStorageFormat {
+    fn default() -> Self {
+        DirectoryStorageFormat::JsonHybrid(BinaryEncoding::default())
+    }
+}
 
 /// Configuration for the directory-based storage backend
 #[derive(Debug, Clone)]
@@ -20,6 +37,8 @@ pub struct DirectoryStorageConfig {
     pub create_if_missing: bool,
     /// File extension to use for message files
     pub file_extension: String,
+    /// Format to use for message serialization
+    pub format: DirectoryStorageFormat,
 }
 
 impl Default for DirectoryStorageConfig {
@@ -28,6 +47,7 @@ impl Default for DirectoryStorageConfig {
             base_dir: PathBuf::from("./kafka-messages"),
             create_if_missing: true,
             file_extension: "json".to_string(),
+            format: DirectoryStorageFormat::default(),
         }
     }
 }
@@ -178,17 +198,31 @@ impl StorageBackend for DirectoryStorage {
             })?;
         }
 
-        // Serialize the message to JSON
-        let json = to_string_pretty(&message).map_err(|e| {
-            StorageError::StoreFailed(format!("Failed to serialize message: {}", e))
-        })?;
+        // Serialize the message based on the configured format
+        let serialized = match &self.config.format {
+            DirectoryStorageFormat::Json => {
+                // Use standard JSON serialization
+                to_string_pretty(&message).map_err(|e| {
+                    StorageError::StoreFailed(format!("Failed to serialize message: {}", e))
+                })?
+            }
+            DirectoryStorageFormat::JsonHybrid(encoding) => {
+                // Use JSON hybrid format with the specified encoding
+                let format = JsonHybridFormat::with_encoding(encoding.clone());
+                let bytes = format.serialize(&message).await.map_err(|e| {
+                    StorageError::StoreFailed(format!("Failed to serialize message: {}", e))
+                })?;
+                String::from_utf8(bytes).map_err(|e| {
+                    StorageError::StoreFailed(format!("Failed to convert serialized message to string: {}", e))
+                })?
+            }
+        };
 
-        // Write the message to a file
         let mut file = fs::File::create(&path).await.map_err(|e| {
             StorageError::StoreFailed(format!("Failed to create file {}: {}", path.display(), e))
         })?;
 
-        file.write_all(json.as_bytes()).await.map_err(|e| {
+        file.write_all(serialized.as_bytes()).await.map_err(|e| {
             StorageError::StoreFailed(format!("Failed to write to file {}: {}", path.display(), e))
         })?;
 
@@ -198,7 +232,7 @@ impl StorageBackend for DirectoryStorage {
         })?;
 
         // Update statistics
-        self.update_stats(&message, json.len() as u64);
+        self.update_stats(&message, serialized.len() as u64);
 
         Ok(())
     }
@@ -276,6 +310,7 @@ mod tests {
             base_dir: temp_dir.path().to_path_buf(),
             create_if_missing: true,
             file_extension: "json".to_string(),
+            format: DirectoryStorageFormat::default(),
         };
 
         let storage = DirectoryStorage::new(config);
@@ -289,6 +324,7 @@ mod tests {
             base_dir: temp_dir.path().to_path_buf(),
             create_if_missing: true,
             file_extension: "json".to_string(),
+            format: DirectoryStorageFormat::Json,
         };
 
         let storage = DirectoryStorage::new(config);
@@ -340,6 +376,7 @@ mod tests {
             base_dir: temp_dir.path().to_path_buf(),
             create_if_missing: true,
             file_extension: "json".to_string(),
+            format: DirectoryStorageFormat::Json,
         };
 
         let storage = DirectoryStorage::new(config);
@@ -405,5 +442,121 @@ mod tests {
         assert_eq!(stats.latest_timestamp, Some(1640995400000));
         assert_eq!(stats.topic_count, 2);
         assert_eq!(stats.partition_count, 3);
+    }
+    
+    #[test]
+    async fn test_directory_storage_json_hybrid_format() {
+        // Create a temporary directory for testing
+        let temp_dir = tempdir().unwrap();
+        let config = DirectoryStorageConfig {
+            base_dir: temp_dir.path().to_path_buf(),
+            create_if_missing: true,
+            file_extension: "json".to_string(),
+            format: DirectoryStorageFormat::JsonHybrid(BinaryEncoding::JsonValue),
+        };
+
+        let storage = DirectoryStorage::new(config);
+        storage.initialize().await.unwrap();
+
+        // Create a message with JSON value
+        let json_value = b"{\"name\":\"John\",\"age\":30}".to_vec();
+        
+        // Verify that the JSON value is valid
+        let parsed_json = serde_json::from_slice::<serde_json::Value>(&json_value);
+        assert!(parsed_json.is_ok(), "JSON value should be valid: {:?}", parsed_json.err());
+        
+        let message = KafkaMessage::new(
+            Some(b"key".to_vec()),
+            Some(json_value),
+            "test-topic".to_string(),
+            0,
+            123,
+        )
+        .with_timestamp(1640995200000);
+
+        // Store the message
+        let store_result = storage.store_message(message.clone()).await;
+        assert!(store_result.is_ok(), "Failed to store message: {:?}", store_result.err());
+
+        // Check that the file was created
+        let file_path = temp_dir
+            .path()
+            .join("test-topic")
+            .join("partition-0")
+            .join("123.json");
+        assert!(file_path.exists(), "File should exist at {:?}", file_path);
+
+        // Read the file content
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        
+        // Print the content for debugging
+        eprintln!("File content: {}", content);
+        
+        // Print the file size
+        let metadata = std::fs::metadata(&file_path).unwrap();
+        eprintln!("File size: {} bytes", metadata.len());
+        
+        // Verify that the JSON value was properly parsed and not base64-encoded
+        assert!(content.contains("\"name\""), "Content should contain 'name' field");
+        assert!(content.contains("\"John\""), "Content should contain 'John' value");
+        assert!(content.contains("\"age\""), "Content should contain 'age' field");
+        assert!(content.contains("30"), "Content should contain '30' value");
+        
+        // The content should not contain base64-encoded data
+        assert!(!content.contains("base64:"), "Content should not contain base64 encoding");
+    }
+    
+    #[test]
+    async fn test_directory_storage_backward_compatibility() {
+        // Create a temporary directory for testing
+        let temp_dir = tempdir().unwrap();
+        
+        // Explicitly use the JSON format to ensure backward compatibility still works when selected
+        let config = DirectoryStorageConfig {
+            base_dir: temp_dir.path().to_path_buf(),
+            create_if_missing: true,
+            file_extension: "json".to_string(),
+            format: DirectoryStorageFormat::Json,
+        };
+        
+        // Verify that the new default is JsonHybrid
+        let default_format = DirectoryStorageFormat::default();
+        assert!(matches!(default_format, DirectoryStorageFormat::JsonHybrid(_)),
+                "Default format should be JsonHybrid, got {:?}", default_format);
+
+        let storage = DirectoryStorage::new(config);
+        storage.initialize().await.unwrap();
+
+        // Create a message with binary value
+        let message = KafkaMessage::new(
+            Some(b"key".to_vec()),
+            Some(b"binary value".to_vec()),
+            "test-topic".to_string(),
+            0,
+            456,
+        )
+        .with_timestamp(1640995200000);
+
+        // Store the message
+        let store_result = storage.store_message(message.clone()).await;
+        assert!(store_result.is_ok(), "Failed to store message: {:?}", store_result.err());
+
+        // Check that the file was created
+        let file_path = temp_dir
+            .path()
+            .join("test-topic")
+            .join("partition-0")
+            .join("456.json");
+        assert!(file_path.exists(), "File should exist at {:?}", file_path);
+
+        // Read the file content
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        
+        // Print the content for debugging
+        eprintln!("File content (default format): {}", content);
+        
+        // Verify that the message was stored correctly
+        let stored_message: KafkaMessage = serde_json::from_str(&content).unwrap();
+        assert_eq!(stored_message, message, "Stored message should match original message");
     }
 }

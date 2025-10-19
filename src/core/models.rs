@@ -6,11 +6,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KafkaMessage {
     /// Message key (binary data)
-    #[serde(with = "serde_bytes_opt")]
     pub key: Option<Vec<u8>>,
 
     /// Message value/payload (binary data)
-    #[serde(with = "serde_bytes_opt")]
     pub value: Option<Vec<u8>>,
 
     /// Message headers
@@ -27,73 +25,6 @@ pub struct KafkaMessage {
 
     /// Message timestamp (milliseconds since epoch)
     pub timestamp: Option<i64>,
-}
-
-/// Module for serializing and deserializing optional binary data
-mod serde_bytes_opt {
-    use serde::{de::Error, Deserialize, Deserializer, Serializer};
-    use std::fmt;
-
-    pub fn serialize<S>(bytes: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match bytes {
-            Some(bytes) => {
-                // Use serialize_bytes for efficient binary serialization
-                serializer.serialize_some(bytes)
-            }
-            None => serializer.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // Custom visitor for handling optional byte arrays
-        struct OptBytesVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for OptBytesVisitor {
-            type Value = Option<Vec<u8>>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("optional byte array")
-            }
-
-            fn visit_none<E>(self) -> Result<Self::Value, E>
-            where
-                E: Error,
-            {
-                Ok(None)
-            }
-
-            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                Ok(Some(Vec::<u8>::deserialize(deserializer)?))
-            }
-
-            // Handle string input by converting to bytes
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: Error,
-            {
-                Ok(Some(v.as_bytes().to_vec()))
-            }
-
-            // Handle byte slice input
-            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-            where
-                E: Error,
-            {
-                Ok(Some(v.to_vec()))
-            }
-        }
-
-        deserializer.deserialize_option(OptBytesVisitor)
-    }
 }
 
 impl KafkaMessage {
