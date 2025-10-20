@@ -189,7 +189,6 @@ async fn test_store_to_file() -> Result<()> {
 /// Test that the `store` command can filter messages by key regex.
 #[ignore]
 #[tokio::test]
-#[ignore]
 async fn test_store_with_key_regex_filter() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -272,6 +271,13 @@ async fn test_store_with_key_regex_filter() -> Result<()> {
     
     info!("Successfully filtered {} messages from {} total", 
           expected_matching, total_messages);
+
+    // Build a normalized, deterministic JSON of the entire stored directory
+    let normalized = build_normalized_dir_json(&temp_dir)?;
+    let _normalized_path = write_normalized_dir_file(&temp_dir, "normalized.json")?;
+
+    // Snapshot test to ensure directory contents match expected messages without changes
+    insta::assert_json_snapshot!("store_with_key_regex_filter_to_directory_normalized", normalized);
 
     Ok(())
 }
@@ -376,6 +382,13 @@ async fn test_store_with_header_filter() -> Result<()> {
     info!("Successfully filtered {} messages with region=us from {} total", 
           expected_matching, total_messages);
 
+    // Build a normalized, deterministic JSON of the entire stored directory
+    let normalized = build_normalized_dir_json(&temp_dir)?;
+    let _normalized_path = write_normalized_dir_file(&temp_dir, "normalized.json")?;
+
+    // Snapshot test to ensure directory contents match expected messages without changes
+    insta::assert_json_snapshot!("store_with_header_filter_to_directory_normalized", normalized);
+
     Ok(())
 }
 
@@ -425,6 +438,13 @@ async fn test_store_with_partition_filter() -> Result<()> {
         Ok(())
     })?;
 
+    // Build a normalized, deterministic JSON of the entire stored directory
+    let normalized = build_normalized_dir_json(&temp_dir)?;
+    let _normalized_path = write_normalized_dir_file(&temp_dir, "normalized.json")?;
+
+    // Snapshot test to ensure directory contents match expected messages without changes
+    insta::assert_json_snapshot!("store_with_partition_filter_to_directory_normalized", normalized);
+
     Ok(())
 }
 
@@ -467,6 +487,13 @@ async fn test_store_with_count_limit() -> Result<()> {
     // Validate stored messages - should only have 5 messages
     validate_stored_messages(&temp_dir, 5, |_| Ok(()))?;
 
+    // Build a normalized, deterministic JSON of the entire stored directory
+    let normalized = build_normalized_dir_json(&temp_dir)?;
+    let _normalized_path = write_normalized_dir_file(&temp_dir, "normalized.json")?;
+
+    // Snapshot test to ensure directory contents match expected messages without changes
+    insta::assert_json_snapshot!("store_with_count_limit_to_directory_normalized", normalized);
+
     Ok(())
 }
 
@@ -507,6 +534,13 @@ async fn test_store_binary_messages() -> Result<()> {
 
     // Validate stored messages
     validate_stored_messages(&temp_dir, 10, |_| Ok(()))?;
+
+    // Build a normalized, deterministic JSON of the entire stored directory
+    let normalized = build_normalized_dir_json(&temp_dir)?;
+    let _normalized_path = write_normalized_dir_file(&temp_dir, "normalized.json")?;
+
+    // Snapshot test to ensure directory contents match expected messages without changes
+    insta::assert_json_snapshot!("store_binary_messages_to_directory_normalized", normalized);
 
     Ok(())
 }

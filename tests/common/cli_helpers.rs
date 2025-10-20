@@ -188,6 +188,8 @@ impl TestDirectory {
                     } else {
                         None
                     }
+                } else if let Some(s) = json["key"].as_str() {
+                    Some(s.to_string())
                 } else {
                     None
                 };
@@ -279,6 +281,8 @@ impl TestDirectory {
                 } else {
                     None
                 }
+            } else if let Some(s) = json["key"].as_str() {
+                Some(s.to_string())
             } else {
                 None
             };

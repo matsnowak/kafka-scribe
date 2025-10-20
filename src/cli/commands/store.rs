@@ -178,7 +178,6 @@ impl StoreCommand {
 
         // Parse the from_offsets parameter when needed
         let partition_offsets = if self.from_offsets.is_some() {
-            unreachable!("not supported yet");
             let offsets = self.parse_from_offsets()?;
             if !self.quiet {
                 println!("Using custom partition offsets: {:?}", offsets);
@@ -190,7 +189,6 @@ impl StoreCommand {
 
         // Parse headers if specified
         let headers = if let Some(header_strings) = &self.header {
-            unreachable!("not supported yet");
             let mut headers_map = HashMap::new();
             for header_str in header_strings {
                 let parts: Vec<&str> = header_str.split('=').collect();
@@ -215,25 +213,13 @@ impl StoreCommand {
             group_id: format!("kafka-scribe-{}", uuid::Uuid::new_v4()),
             from_beginning: self.from_beginning,
             from_offsets: partition_offsets,
-            from_timestamp: self
-                .from_timestamp
-                .inspect(|_| unreachable!("not supported yet")),
+            from_timestamp: self.from_timestamp,
             count: self.count,
-            until_offset: self
-                .until_offset
-                .inspect(|_| unreachable!("not supported yet")),
-            until_timestamp: self
-                .until_timestamp
-                .inspect(|_| unreachable!("not supported yet")),
+            until_offset: self.until_offset,
+            until_timestamp: self.until_timestamp,
             live: self.live,
-            partitions: self
-                .partitions
-                .clone()
-                .inspect(|_| unreachable!("not supported yet")),
-            key_regex: self
-                .key_regex
-                .clone()
-                .inspect(|_| unreachable!("not supported yet")),
+            partitions: self.partitions.clone(),
+            key_regex: self.key_regex.clone(),
             headers,
             batch_size: self.batch_size,
             buffer_size: self.buffer_size,
@@ -290,7 +276,6 @@ impl StoreCommand {
             let storage = DirectoryStorage::new(config);
             Arc::new(storage)
         } else if let Some(file_path) = &self.to_file {
-            unreachable!("not supported yet");
             let config = SingleFileStorageConfig {
                 file_path: PathBuf::from(file_path),
                 pretty_print: self.format == "json" && self.verbose, // Pretty print JSON if verbose
@@ -299,7 +284,6 @@ impl StoreCommand {
             let storage = SingleFileStorage::new(config);
             Arc::new(storage)
         } else if let Some(_db_conn) = &self.to_db {
-            unreachable!("not supported yet");
             // Database storage is not implemented yet
             return Err(anyhow::anyhow!("Database storage is not implemented yet"));
         } else {
