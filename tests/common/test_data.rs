@@ -6,11 +6,10 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
-use rand::{distributions::Alphanumeric, Rng, RngCore, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{distributions::Alphanumeric, Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use uuid::Uuid;
 
 /// A test message for use in integration tests.
@@ -63,26 +62,24 @@ impl TestMessage {
             topic: None,
         }
     }
-    
+
     /// Helper method to check if a header exists
     pub fn has_header(&self, key: &str) -> bool {
         self.headers.as_ref().map_or(false, |h| h.contains_key(key))
     }
-    
+
     /// Helper method to get a header value as a string
     pub fn get_header_as_string(&self, key: &str) -> Option<String> {
-        self.headers.as_ref()
+        self.headers
+            .as_ref()
             .and_then(|h| h.get(key))
             .map(|v| String::from_utf8_lossy(v).to_string())
     }
-    
+
     /// Helper method to add a header
     pub fn add_header(&mut self, key: impl AsRef<str>, value: impl AsRef<str>) {
         let headers = self.headers.get_or_insert_with(HashMap::new);
-        headers.insert(
-            key.as_ref().to_string(),
-            value.as_ref().as_bytes().to_vec(),
-        );
+        headers.insert(key.as_ref().to_string(), value.as_ref().as_bytes().to_vec());
     }
 
     /// Creates a new test message with a JSON value.
@@ -103,14 +100,11 @@ impl TestMessage {
             headers_bytes,
         )
     }
-    
+
     /// Adds a header to the message and returns the message.
     pub fn with_header(mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> Self {
         let headers = self.headers.get_or_insert_with(HashMap::new);
-        headers.insert(
-            key.as_ref().to_string(),
-            value.as_ref().as_bytes().to_vec(),
-        );
+        headers.insert(key.as_ref().to_string(), value.as_ref().as_bytes().to_vec());
         self
     }
 }
@@ -169,14 +163,8 @@ pub fn generate_binary_test_messages(count: usize) -> Vec<TestMessage> {
         }
 
         let mut headers = HashMap::new();
-        headers.insert(
-            "message-type".to_string(),
-            "binary".as_bytes().to_vec(),
-        );
-        headers.insert(
-            "sequence".to_string(),
-            i.to_string().as_bytes().to_vec(),
-        );
+        headers.insert("message-type".to_string(), "binary".as_bytes().to_vec());
+        headers.insert("sequence".to_string(), i.to_string().as_bytes().to_vec());
 
         messages.push(TestMessage::new(key, value, Some(headers)));
     }
@@ -295,7 +283,7 @@ pub fn generate_timestamped_test_messages() -> Vec<TestMessage> {
         let value = json!({
             "id": i,
             "time": "past",
-            "data": random_string(10),
+            "data": "fixed-data",
         });
 
         let mut msg = TestMessage::new_json(key, value, None);
@@ -307,10 +295,10 @@ pub fn generate_timestamped_test_messages() -> Vec<TestMessage> {
     for i in 5..10 {
         let key = format!("recent-{}", i);
         let value = json!({
-            "id": i,
-            "time": "recent",
-            "data": random_string(10),
-        });
+                "id": i,
+                "time": "recent",
+        "data": "fixed-data",
+            });
 
         messages.push(TestMessage::new_json(key, value, None));
     }
@@ -338,7 +326,7 @@ impl TestDataGenerator {
             rng: StdRng::from_entropy(),
         }
     }
-    
+
     /// Create a message with a JSON value
     pub fn create_message_with_json_value(
         &mut self,
@@ -404,7 +392,8 @@ impl TestDataGenerator {
             "application/octet-stream".to_string(),
         );
 
-        let headers_bytes = headers.into_iter()
+        let headers_bytes = headers
+            .into_iter()
             .map(|(k, v)| (k, v.as_bytes().to_vec()))
             .collect();
 
@@ -428,10 +417,27 @@ impl TestDataGenerator {
         let service = service_names[self.rng.gen_range(0..service_names.len())];
 
         let messages = match log_level.as_str() {
-            "INFO" => vec!["User logged in", "Request processed", "Payment received", "Order shipped"],
-            "WARN" => vec!["Slow database query", "API rate limit approaching", "High memory usage"],
-            "ERROR" => vec!["Database connection failed", "Payment declined", "API request timeout"],
-            "DEBUG" => vec!["Function X called with params Y", "Processing item Z", "Cache hit ratio: 0.8"],
+            "INFO" => vec![
+                "User logged in",
+                "Request processed",
+                "Payment received",
+                "Order shipped",
+            ],
+            "WARN" => vec![
+                "Slow database query",
+                "API rate limit approaching",
+                "High memory usage",
+            ],
+            "ERROR" => vec![
+                "Database connection failed",
+                "Payment declined",
+                "API request timeout",
+            ],
+            "DEBUG" => vec![
+                "Function X called with params Y",
+                "Processing item Z",
+                "Cache hit ratio: 0.8",
+            ],
             _ => vec!["Unknown log message"],
         };
 
@@ -439,13 +445,9 @@ impl TestDataGenerator {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_millis().to_string();
-        let log_message = format!("[{}] [{} {}] {}", 
-            timestamp,
-            service,
-            log_level,
-            message
-        );
+            .as_millis()
+            .to_string();
+        let log_message = format!("[{}] [{} {}] {}", timestamp, service, log_level, message);
 
         let key = format!("{}-{}", service, Uuid::new_v4());
 
@@ -453,7 +455,8 @@ impl TestDataGenerator {
         headers.insert("log-level".to_string(), log_level.clone());
         headers.insert("service".to_string(), service.to_string());
 
-        let headers_bytes = headers.into_iter()
+        let headers_bytes = headers
+            .into_iter()
             .map(|(k, v)| (k, v.as_bytes().to_vec()))
             .collect();
 
@@ -491,7 +494,11 @@ impl TestDataGenerator {
     }
 
     /// Generate messages with a specific pattern for filtering tests
-    pub fn generate_filterable_messages(&mut self, key_pattern: &str, count: usize) -> Vec<TestMessage> {
+    pub fn generate_filterable_messages(
+        &mut self,
+        key_pattern: &str,
+        count: usize,
+    ) -> Vec<TestMessage> {
         let mut messages = Vec::with_capacity(count);
 
         for i in 0..count {
@@ -501,7 +508,8 @@ impl TestDataGenerator {
             let mut headers = HashMap::new();
             headers.insert("pattern".to_string(), key_pattern.to_string());
 
-            let headers_bytes = headers.into_iter()
+            let headers_bytes = headers
+                .into_iter()
                 .map(|(k, v)| (k, v.as_bytes().to_vec()))
                 .collect();
 

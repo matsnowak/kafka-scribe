@@ -286,7 +286,8 @@ impl KafkaTestContext {
         for message in messages {
             let mut record = FutureRecord::to(topic)
                 .payload(&message.value)
-                .key(&message.key);
+                .key(&message.key)
+                .timestamp(message.timestamp);
 
             if let Some(p) = partition {
                 record = record.partition(p);

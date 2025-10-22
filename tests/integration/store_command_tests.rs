@@ -547,7 +547,6 @@ async fn test_store_binary_messages() -> Result<()> {
 
 /// Test that the `store` command can filter messages by timestamp.
 #[tokio::test]
-#[ignore]
 async fn test_store_with_timestamp_filter() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -595,6 +594,13 @@ async fn test_store_with_timestamp_filter() -> Result<()> {
         }
         Ok(())
     })?;
+
+    // Build a normalized, deterministic JSON of the entire stored directory
+    let normalized = build_normalized_dir_json(&temp_dir)?;
+    let _normalized_path = write_normalized_dir_file(&temp_dir, "normalized.json")?;
+
+    // Snapshot test to ensure directory contents match expected messages without changes
+    insta::assert_json_snapshot!("store_with_timestamp_filter_to_directory_normalized", normalized);
 
     Ok(())
 }

@@ -1,0 +1,106 @@
+---
+source: tests/integration/store_command_tests.rs
+expression: normalized
+---
+[
+  {
+    "content": {
+      "headers": {
+        "even": "false",
+        "message-type": "test",
+        "sequence": "3"
+      },
+      "key": "key-3",
+      "offset": 0,
+      "partition": 1,
+      "timestamp": 1700000000000,
+      "topic": "test-partition-filter",
+      "value": {
+        "data": {
+          "field1": "field1_03",
+          "field2": 3,
+          "field3": false
+        },
+        "id": 3,
+        "name": "Test Message 3",
+        "timestamp": 1700000000000
+      }
+    },
+    "path": "test-partition-filter/partition-1/0.json"
+  },
+  {
+    "content": {
+      "headers": {
+        "even": "true",
+        "message-type": "test",
+        "sequence": "4"
+      },
+      "key": "key-4",
+      "offset": 1,
+      "partition": 1,
+      "timestamp": 1700000000000,
+      "topic": "test-partition-filter",
+      "value": {
+        "data": {
+          "field1": "field1_04",
+          "field2": 4,
+          "field3": true
+        },
+        "id": 4,
+        "name": "Test Message 4",
+        "timestamp": 1700000000000
+      }
+    },
+    "path": "test-partition-filter/partition-1/1.json"
+  },
+  {
+    "content": {
+      "headers": {
+        "even": "false",
+        "message-type": "test",
+        "sequence": "5"
+      },
+      "key": "key-5",
+      "offset": 2,
+      "partition": 1,
+      "timestamp": 1700000000000,
+      "topic": "test-partition-filter",
+      "value": {
+        "data": {
+          "field1": "field1_05",
+          "field2": 0,
+          "field3": false
+        },
+        "id": 5,
+        "name": "Test Message 5",
+        "timestamp": 1700000000000
+      }
+    },
+    "path": "test-partition-filter/partition-1/2.json"
+  },
+  {
+    "content": {
+      "headers": {
+        "even": "true",
+        "message-type": "test",
+        "sequence": "6"
+      },
+      "key": "key-6",
+      "offset": 3,
+      "partition": 1,
+      "timestamp": 1700000000000,
+      "topic": "test-partition-filter",
+      "value": {
+        "data": {
+          "field1": "field1_06",
+          "field2": 1,
+          "field3": true
+        },
+        "id": 6,
+        "name": "Test Message 6",
+        "timestamp": 1700000000000
+      }
+    },
+    "path": "test-partition-filter/partition-1/3.json"
+  }
+]

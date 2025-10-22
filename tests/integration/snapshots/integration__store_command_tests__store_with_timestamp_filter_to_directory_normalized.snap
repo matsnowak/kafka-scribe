@@ -1,0 +1,86 @@
+---
+source: tests/integration/store_command_tests.rs
+expression: normalized
+---
+[
+  {
+    "content": {
+      "headers": {},
+      "key": "recent-5",
+      "offset": 5,
+      "partition": 0,
+      "timestamp": 1700000000000,
+      "topic": "test-timestamp-filter",
+      "value": {
+        "data": "fixed-data",
+        "id": 5,
+        "time": "recent"
+      }
+    },
+    "path": "test-timestamp-filter/partition-0/5.json"
+  },
+  {
+    "content": {
+      "headers": {},
+      "key": "recent-6",
+      "offset": 6,
+      "partition": 0,
+      "timestamp": 1700000000000,
+      "topic": "test-timestamp-filter",
+      "value": {
+        "data": "fixed-data",
+        "id": 6,
+        "time": "recent"
+      }
+    },
+    "path": "test-timestamp-filter/partition-0/6.json"
+  },
+  {
+    "content": {
+      "headers": {},
+      "key": "recent-7",
+      "offset": 7,
+      "partition": 0,
+      "timestamp": 1700000000000,
+      "topic": "test-timestamp-filter",
+      "value": {
+        "data": "fixed-data",
+        "id": 7,
+        "time": "recent"
+      }
+    },
+    "path": "test-timestamp-filter/partition-0/7.json"
+  },
+  {
+    "content": {
+      "headers": {},
+      "key": "recent-8",
+      "offset": 8,
+      "partition": 0,
+      "timestamp": 1700000000000,
+      "topic": "test-timestamp-filter",
+      "value": {
+        "data": "fixed-data",
+        "id": 8,
+        "time": "recent"
+      }
+    },
+    "path": "test-timestamp-filter/partition-0/8.json"
+  },
+  {
+    "content": {
+      "headers": {},
+      "key": "recent-9",
+      "offset": 9,
+      "partition": 0,
+      "timestamp": 1700000000000,
+      "topic": "test-timestamp-filter",
+      "value": {
+        "data": "fixed-data",
+        "id": 9,
+        "time": "recent"
+      }
+    },
+    "path": "test-timestamp-filter/partition-0/9.json"
+  }
+]
