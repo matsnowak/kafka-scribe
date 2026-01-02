@@ -1,16 +1,16 @@
 use clap::Args;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tokio::signal;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::core::models::KafkaMessage;
+use crate::core::store_usecase::{StoreKafkaCommand, StoreKafkaFrom, StoreKafkaTo};
 use crate::kafka::consumer::{KafkaConsumer, KafkaConsumerConfig};
 use crate::storage::files::directory::{DirectoryStorage, DirectoryStorageConfig};
 use crate::storage::files::single_file::{SingleFileStorage, SingleFileStorageConfig};
@@ -168,6 +168,7 @@ impl StoreCommand {
     }
 
     pub async fn execute(&self) -> anyhow::Result<()> {
+        return self.execute_new().await;
         // Validate that a destination is specified
         /*if self.to_dir.is_none() && self.to_file.is_none() && self.to_db.is_none() {
             return Err(anyhow::anyhow!("No destination specified. Use --to-dir, --to-file, or --to-db"));
@@ -430,6 +431,21 @@ impl StoreCommand {
         }
 
         Ok(())
+    }
+
+    async fn execute_new(&self) -> Result<()> {
+        let random_group_id = format!("kafka-scribe-{}", uuid::Uuid::new_v4());
+        info!("Using random group ID: {}", random_group_id);
+
+        let command = StoreKafkaCommand {
+            bootstrap_servers: self.bootstrap_servers.clone(),
+            topic: self.topic.clone(),
+            group_id: random_group_id,
+            from: StoreKafkaFrom::FromBegining,
+            to: StoreKafkaTo::Live,
+            store_to_storage: StoreKafkaToStorageBackend::Directory("test-storage".to_string()),
+        };
+        crate::core::store_usecase::store(command).await
     }
 }
 
@@ -813,6 +829,4 @@ mod tests {
         assert!(err.contains("Invalid format for --header"));
         assert!(err.contains("invalid-header"));
     }
-
-
 }

@@ -26,6 +26,7 @@ async fn main() -> Result<()> {
 
     // Parse command line arguments
     let cli = Cli::parse();
+    println!("Parsed cli");
 
     // Execute the appropriate command
     match cli.command {
