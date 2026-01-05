@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::vec;
 
 use anyhow::Result;
@@ -11,7 +11,9 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer};
 use rdkafka::error::KafkaResult;
-use rdkafka::message::{BorrowedHeaders, BorrowedMessage, Headers, Message, OwnedHeaders, OwnedMessage};
+use rdkafka::message::{
+    BorrowedHeaders, BorrowedMessage, Headers, Message, OwnedHeaders, OwnedMessage,
+};
 use rdkafka::metadata::{Metadata, MetadataTopic};
 use rdkafka::topic_partition_list::{self, Offset, TopicPartitionList};
 use rdkafka::util::Timeout;
@@ -100,11 +102,18 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
     let consumer = Arc::new(consumer);
 
     let storage = Arc::new(create_storage(&command)?);
-    storage.initialize().await.map_err(|e| anyhow::anyhow!("Storage init error: {}", e))?;
+    storage
+        .initialize()
+        .await
+        .map_err(|e| anyhow::anyhow!("Storage init error: {}", e))?;
     let pump_task = create_task(consumer.clone(), storage.clone());
     let processed = pump_task.run().await?;
     info!("Stored {} messages", processed);
-    storage.close().await.map_err(|e| anyhow::anyhow!("Storage close error: {}", e))?;
+    storage
+        .close()
+        .await
+        .map_err(|e| anyhow::anyhow!("Storage close error: {}", e))?;
+    drop(consumer);
 
     info!("Finished storing messages");
     Ok(())
@@ -157,7 +166,10 @@ where
                     Ok(None) => {
                         // No message in this poll. If we've been idle long enough, stop.
                         if last_message_at.elapsed() >= idle_shutdown_after {
-                            info!("No new messages for {:?}, stopping consumer", idle_shutdown_after);
+                            info!(
+                                "No new messages for {:?}, stopping consumer",
+                                idle_shutdown_after
+                            );
                             break;
                         }
                         continue;
@@ -188,11 +200,18 @@ where
             consumed
         });
 
-        let produced = producer_handle.await.map_err(|e| anyhow::anyhow!("Producer task join error: {}", e))?;
+        let produced = producer_handle
+            .await
+            .map_err(|e| anyhow::anyhow!("Producer task join error: {}", e))?;
         // tx is dropped when producer task ends; channel closes and writer finishes
-        let consumed = writer_handle.await.map_err(|e| anyhow::anyhow!("Writer task join error: {}", e))?;
+        let consumed = writer_handle
+            .await
+            .map_err(|e| anyhow::anyhow!("Writer task join error: {}", e))?;
 
-        info!("PumpTask finished. produced={}, consumed={}", produced, consumed);
+        info!(
+            "PumpTask finished. produced={}, consumed={}",
+            produced, consumed
+        );
         Ok(consumed)
     }
 }
