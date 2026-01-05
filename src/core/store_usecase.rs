@@ -106,6 +106,7 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
     info!("Stored {} messages", processed);
     storage.close().await.map_err(|e| anyhow::anyhow!("Storage close error: {}", e))?;
 
+    info!("Finished storing messages");
     Ok(())
 }
 
@@ -181,6 +182,7 @@ where
                     consumed += 1;
                 }
             }
+            info!("Finished storing messages: {consumed}");
             // Flush at the end
             let _ = storage.flush().await;
             consumed
