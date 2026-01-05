@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::core::models::KafkaMessage;
-use crate::core::store_usecase::{StoreKafkaCommand, StoreKafkaFrom, StoreKafkaTo};
+use crate::core::store_usecase::{StoreKafkaCommand, StoreKafkaFrom, StoreKafkaTo, StoreKafkaToStorageBackend};
 use crate::kafka::consumer::{KafkaConsumer, KafkaConsumerConfig};
 use crate::storage::files::directory::{DirectoryStorage, DirectoryStorageConfig};
 use crate::storage::files::single_file::{SingleFileStorage, SingleFileStorageConfig};

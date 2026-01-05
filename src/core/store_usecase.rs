@@ -1,8 +1,7 @@
-use anyhow::Ok;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH, Instant};
 use std::vec;
 
 use anyhow::Result;
@@ -12,7 +11,7 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer};
 use rdkafka::error::KafkaResult;
-use rdkafka::message::{BorrowedHeaders, Headers, Message, OwnedHeaders, OwnedMessage};
+use rdkafka::message::{BorrowedHeaders, BorrowedMessage, Headers, Message, OwnedHeaders, OwnedMessage};
 use rdkafka::metadata::{Metadata, MetadataTopic};
 use rdkafka::topic_partition_list::{self, Offset, TopicPartitionList};
 use rdkafka::util::Timeout;
@@ -24,6 +23,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::core::models::KafkaMessage;
 use crate::storage::files::DirectoryStorage;
+use crate::storage::files::DirectoryStorageConfig;
 use crate::storage::{self, StorageBackend};
 
 #[derive(Debug)]
@@ -100,42 +100,123 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
     let consumer = Arc::new(consumer);
 
     let storage = Arc::new(create_storage(&command)?);
+    storage.initialize().await.map_err(|e| anyhow::anyhow!("Storage init error: {}", e))?;
     let pump_task = create_task(consumer.clone(), storage.clone());
-    // let kafka_start_offsets = parse_start_offsets(&command.from)?;
-    // let kafka_end_offsets = parse_end_offsets(&command.to)?;
-    //
-    // info!("kafka_start_offsets: {:?}", kafka_start_offsets);
-    // info!("kafka_end_offsets: {:?}", kafka_end_offsets);
-
-    // TODO: extract to dependency
-    // consumer.initialize().await?;
+    let processed = pump_task.run().await?;
+    info!("Stored {} messages", processed);
+    storage.close().await.map_err(|e| anyhow::anyhow!("Storage close error: {}", e))?;
 
     Ok(())
 }
 
-struct PumpTask {
-    consumer: impl CoreKafkaConsumer,
-    storage: impl StorageBackend,
+struct PumpTask<S, D>
+where
+    S: CoreKafkaConsumer,
+    D: StorageBackend,
+{
+    consumer: Arc<S>,
+    storage: Arc<D>,
+    channel_capacity: usize,
 }
 
-fn create_task(
-    consumer: Arc<impl CoreKafkaConsumer>,
-    storage: Arc<impl StorageBackend>,
-) -> PumpTask {
-    let (tx, mut rx) = mpsc::channel::<KafkaMessage>(100);
-    // TODO: buffer size to parameters or command
+impl<S, D> PumpTask<S, D>
+where
+    S: CoreKafkaConsumer + 'static,
+    D: StorageBackend + 'static,
+{
+    pub fn new(consumer: Arc<S>, storage: Arc<D>, channel_capacity: usize) -> Self {
+        Self {
+            consumer,
+            storage,
+            channel_capacity,
+        }
+    }
+
+    pub async fn run(&self) -> Result<u64> {
+        let (tx, mut rx) = mpsc::channel::<KafkaMessage>(self.channel_capacity);
+        let consumer = self.consumer.clone();
+        let storage = self.storage.clone();
+        info!("Starting PumpTask");
+
+        // Producer task: read from Kafka and send to channel
+        let producer_handle = tokio::spawn(async move {
+            let mut produced: u64 = 0;
+            let idle_shutdown_after = Duration::from_secs(5);
+            let mut last_message_at = Instant::now();
+            loop {
+                match consumer.recv_next(500).await {
+                    Ok(Some(msg)) => {
+                        if tx.send(msg).await.is_err() {
+                            // Receiver dropped, stop producing
+                            break;
+                        }
+                        produced += 1;
+                        last_message_at = Instant::now();
+                    }
+                    Ok(None) => {
+                        // No message in this poll. If we've been idle long enough, stop.
+                        if last_message_at.elapsed() >= idle_shutdown_after {
+                            info!("No new messages for {:?}, stopping consumer", idle_shutdown_after);
+                            break;
+                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        error!("Error receiving from Kafka: {}", e);
+                        break;
+                    }
+                }
+            }
+            produced
+        });
+
+        // Consumer task: write to storage
+        let writer_handle = tokio::spawn(async move {
+            let mut consumed: u64 = 0;
+            while let Some(msg) = rx.recv().await {
+                if let Err(e) = storage.store_message(msg).await {
+                    error!("Error storing message: {}", e);
+                    // Decide whether to stop on error; for now continue
+                } else {
+                    consumed += 1;
+                }
+            }
+            // Flush at the end
+            let _ = storage.flush().await;
+            consumed
+        });
+
+        let produced = producer_handle.await.map_err(|e| anyhow::anyhow!("Producer task join error: {}", e))?;
+        // tx is dropped when producer task ends; channel closes and writer finishes
+        let consumed = writer_handle.await.map_err(|e| anyhow::anyhow!("Writer task join error: {}", e))?;
+
+        info!("PumpTask finished. produced={}, consumed={}", produced, consumed);
+        Ok(consumed)
+    }
+}
+fn create_task<S, D>(consumer: Arc<S>, storage: Arc<D>) -> PumpTask<S, D>
+where
+    S: CoreKafkaConsumer,
+    D: StorageBackend,
+{
+    let channel_capacity = 100;
     let pump_task = PumpTask {
         consumer: consumer.clone(),
         storage: storage.clone(),
+        channel_capacity,
     };
-    
+
     pump_task
 }
+
+use std::path::PathBuf;
 
 fn create_storage(command: &StoreKafkaCommand) -> Result<impl StorageBackend> {
     match &command.store_to_storage {
         StoreKafkaToStorageBackend::Directory(path) => {
-            let storage = DirectoryStorage::new(Default::default());
+            let mut cfg = DirectoryStorageConfig::default();
+            cfg.base_dir = PathBuf::from(path);
+            let storage = DirectoryStorage::new(cfg);
             Ok(storage)
         }
     }
@@ -228,12 +309,14 @@ fn print_metadata(metadata: &TopicMetadata) {
 // kafka-consumer
 // BLOCK begin
 #[async_trait]
-pub trait CoreKafkaConsumer {
+pub trait CoreKafkaConsumer: Send + Sync {
     async fn initialize(&self) -> Result<()>;
     async fn fetch_metadata(&self) -> Result<TopicMetadata>;
     async fn fetch_offset_positions(&self) -> Result<TopicPartitionsAssignment>;
-
     async fn assign(&self, tpl: TopicPartitionsAssignment) -> Result<()>;
+    /// Receive next KafkaMessage within the given timeout (milliseconds).
+    /// Returns Ok(None) on timeout without a message.
+    async fn recv_next(&self, timeout_ms: u64) -> Result<Option<KafkaMessage>>;
 }
 
 struct TopicMetadata {
@@ -301,6 +384,34 @@ impl TopicPartitionsAssignment {
     pub fn from_rdkafka(tpl: TopicPartitionList) -> TopicPartitionsAssignment {
         TopicPartitionsAssignment { inner: tpl }
     }
+}
+
+fn convert_to_kafka_message(message: &OwnedMessage) -> KafkaMessage {
+    let key = message.key().map(|k| k.to_vec());
+    let payload = message.payload().map(|p| p.to_vec());
+    let topic = message.topic().to_string();
+    let partition = message.partition();
+    let offset = message.offset();
+    let timestamp = message.timestamp().to_millis();
+
+    let mut kafka_message = KafkaMessage::new(key, payload, topic, partition, offset);
+
+    if let Some(ts) = timestamp {
+        kafka_message = kafka_message.with_timestamp(ts);
+    }
+
+    if let Some(headers) = message.headers() {
+        for i in 0..headers.count() {
+            let header = headers.get(i);
+            if let Some(value_bytes) = header.value {
+                if let Ok(value_str) = std::str::from_utf8(value_bytes) {
+                    kafka_message = kafka_message.with_header(header.key, value_str);
+                }
+            }
+        }
+    }
+
+    kafka_message
 }
 
 struct RdKafkaConsumer {
@@ -379,6 +490,25 @@ impl CoreKafkaConsumer for RdKafkaConsumer {
         self.inner_consumer
             .assign(&tpl.inner)
             .map_err(|e| anyhow::anyhow!("Error assigning partitions: {}", e))
+    }
+
+    async fn recv_next(&self, timeout_ms: u64) -> Result<Option<KafkaMessage>> {
+        // Use StreamConsumer::recv with timeout
+        match tokio::time::timeout(
+            Duration::from_millis(timeout_ms),
+            self.inner_consumer.recv(),
+        )
+        .await
+        {
+            Err(_elapsed) => Ok(None),
+            Ok(Err(e)) => Err(anyhow::anyhow!("Kafka receive error: {}", e)),
+            Ok(Ok(bmsg)) => {
+                // Convert BorrowedMessage to OwnedMessage to detach from librdkafka lifetime
+                let owned: OwnedMessage = bmsg.detach();
+                let msg = convert_to_kafka_message(&owned);
+                Ok(Some(msg))
+            }
+        }
     }
 }
 
