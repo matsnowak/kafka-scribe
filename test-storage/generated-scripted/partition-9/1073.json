@@ -1,0 +1,18 @@
+{
+  "headers": {
+    "content-type": "application/json",
+    "source": "generate_test_data.sh"
+  },
+  "key": "key-15",
+  "offset": 1073,
+  "partition": 9,
+  "timestamp": 1767741305245,
+  "topic": "generated-scripted",
+  "value": {
+    "key": "key-15",
+    "message": "hello from kafka-scribe test data",
+    "random": 24224,
+    "seq": 1965,
+    "timestamp_ms": "1767741305243"
+  }
+}
