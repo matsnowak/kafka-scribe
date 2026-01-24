@@ -1,33 +1,26 @@
-use std::collections::HashMap;
-use std::ops::Deref;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::vec;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use clap::Command;
 use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
-use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer};
+use rdkafka::consumer::{Consumer, ConsumerContext, Rebalance, StreamConsumer};
 use rdkafka::error::KafkaResult;
-use rdkafka::message::{
-    BorrowedHeaders, BorrowedMessage, Headers, Message, OwnedHeaders, OwnedMessage,
-};
+use rdkafka::message::{Headers, Message, OwnedMessage};
 use rdkafka::metadata::{Metadata, MetadataTopic};
-use rdkafka::topic_partition_list::{self, Offset, TopicPartitionList};
-use rdkafka::util::Timeout;
-use rdkafka::Timestamp;
-use regex::Regex;
+use rdkafka::{
+    topic_partition_list::{Offset, TopicPartitionList},
+    util::Timeout,
+};
 use tokio::signal;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
 use crate::core::models::KafkaMessage;
 use crate::storage::files::DirectoryStorage;
 use crate::storage::files::DirectoryStorageConfig;
-use crate::storage::{self, StorageBackend};
+use crate::storage::{StorageBackend};
 
 #[derive(Debug)]
 pub struct StoreKafkaCommand {
@@ -67,21 +60,21 @@ impl StoreUsecaseImpl {
         &self,
         command: &StoreKafkaCommand,
     ) -> Result<impl CoreKafkaConsumer> {
-        Ok(RdKafkaConsumer::new(
+        RdKafkaConsumer::new(
             command.bootstrap_servers.clone(),
             command.topic.clone(),
             command.group_id.clone(),
-        )?)
+        )
     }
 }
 
 // TODO: could be dependency
 fn create_consumer(command: &StoreKafkaCommand) -> Result<impl CoreKafkaConsumer> {
-    Ok(RdKafkaConsumer::new(
+    RdKafkaConsumer::new(
         command.bootstrap_servers.clone(),
         command.topic.clone(),
         command.group_id.clone(),
-    )?)
+    )
 }
 
 type CommandExecutionResult = ();
@@ -262,13 +255,13 @@ where
     D: StorageBackend,
 {
     let channel_capacity = 100;
-    let pump_task = PumpTask {
+    
+
+    PumpTask {
         consumer: consumer.clone(),
         storage: storage.clone(),
         channel_capacity,
-    };
-
-    pump_task
+    }
 }
 
 use std::path::PathBuf;
