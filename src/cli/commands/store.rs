@@ -10,7 +10,9 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::core::models::KafkaMessage;
-use crate::core::store_usecase::{StoreKafkaCommand, StoreKafkaFrom, StoreKafkaTo, StoreKafkaToStorageBackend};
+use crate::core::store_usecase::{
+    StoreKafkaCommand, StoreKafkaFrom, StoreKafkaTo, StoreKafkaToStorageBackend,
+};
 use crate::kafka::consumer::{KafkaConsumer, KafkaConsumerConfig};
 use crate::storage::files::directory::{DirectoryStorage, DirectoryStorageConfig};
 use crate::storage::files::single_file::{SingleFileStorage, SingleFileStorageConfig};
@@ -169,12 +171,14 @@ impl StoreCommand {
 
     pub async fn execute(&self) -> anyhow::Result<()> {
         return self.execute_new().await;
+
+        // The code below is unreachable but kept for reference
         // Validate that a destination is specified
-        /*if self.to_dir.is_none() && self.to_file.is_none() && self.to_db.is_none() {
-            return Err(anyhow::anyhow!("No destination specified. Use --to-dir, --to-file, or --to-db"));
-        }*/
-        if self.to_dir.is_none() {
-            return Err(anyhow::anyhow!("No destination specified. Use --to-dir"));
+        #[allow(unreachable_code)]
+        if self.to_dir.is_none() && self.to_file.is_none() && self.to_db.is_none() {
+            return Err(anyhow::anyhow!(
+                "No destination specified. Use --to-dir, --to-file, or --to-db"
+            ));
         }
 
         // Parse the from_offsets parameter when needed

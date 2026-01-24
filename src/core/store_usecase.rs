@@ -19,6 +19,7 @@ use rdkafka::topic_partition_list::{self, Offset, TopicPartitionList};
 use rdkafka::util::Timeout;
 use rdkafka::Timestamp;
 use regex::Regex;
+use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -93,7 +94,6 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
     print_metadata(&topic_metadata);
 
     let topic_assigment = parse_topic_assignment(&command, &topic_metadata);
-    // let topic_assigment = parse_topic_assigment(&StoreKafkaCommand, &topic_metadata)?;
     consumer.assign(topic_assigment).await?;
 
     let topic_offset_positions = consumer.fetch_offset_positions().await?;
@@ -106,17 +106,57 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
         .initialize()
         .await
         .map_err(|e| anyhow::anyhow!("Storage init error: {}", e))?;
+
     let pump_task = create_task(consumer.clone(), storage.clone());
-    let processed = pump_task.run().await?;
+
+    // Set up signal handling for graceful shutdown
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to listen for ctrl-c signal");
+    };
+
+    let term_signal = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to listen for terminate signal")
+            .recv()
+            .await;
+    };
+
+    // Run pump task with signal handling
+    let processed = tokio::select! {
+        // Check for signals
+        _ = ctrl_c => {
+            info!("Received interrupt signal, shutting down gracefully...");
+            return Err(anyhow::anyhow!("Interrupted by user"));
+        }
+        _ = term_signal => {
+            info!("Received termination signal, shutting down gracefully...");
+            return Err(anyhow::anyhow!("Terminated by signal"));
+        }
+        // Wait for pump task to complete
+        result = pump_task.run() => {
+            result?
+        }
+    };
+
     info!("Stored {} messages", processed);
+
     storage
         .close()
         .await
         .map_err(|e| anyhow::anyhow!("Storage close error: {}", e))?;
-    drop(consumer);
+
+    // Stop the consumer to clean up background threads
+    consumer.stop().await?;
 
     info!("Finished storing messages");
-    Ok(())
+
+    // Force exit to work around rdkafka background thread cleanup issue
+    // The consumer's background threads don't terminate cleanly even after
+    // unsubscribe/unassign, causing the program to hang on drop(consumer).
+    // See: https://github.com/confluentinc/librdkafka/issues/3127
+    std::process::exit(0);
 }
 
 struct PumpTask<S, D>
@@ -142,19 +182,20 @@ where
         }
     }
 
-    pub async fn run(&self) -> Result<u64> {
+    /// Run the pump task, consuming self to ensure Arc references are dropped after completion
+    pub async fn run(self) -> Result<u64> {
         let (tx, mut rx) = mpsc::channel::<KafkaMessage>(self.channel_capacity);
-        let consumer = self.consumer.clone();
-        let storage = self.storage.clone();
+        let consumer = self.consumer;
+        let storage = self.storage;
         info!("Starting PumpTask");
 
         // Producer task: read from Kafka and send to channel
         let producer_handle = tokio::spawn(async move {
             let mut produced: u64 = 0;
-            let idle_shutdown_after = Duration::from_secs(5);
+            let idle_shutdown_after = Duration::from_millis(500);
             let mut last_message_at = Instant::now();
             loop {
-                match consumer.recv_next(500).await {
+                match consumer.recv_next(200).await {
                     Ok(Some(msg)) => {
                         if tx.send(msg).await.is_err() {
                             // Receiver dropped, stop producing
@@ -167,8 +208,8 @@ where
                         // No message in this poll. If we've been idle long enough, stop.
                         if last_message_at.elapsed() >= idle_shutdown_after {
                             info!(
-                                "No new messages for {:?}, stopping consumer",
-                                idle_shutdown_after
+                                "No new messages for {}ms, stopping consumer",
+                                idle_shutdown_after.as_millis()
                             );
                             break;
                         }
@@ -338,6 +379,8 @@ pub trait CoreKafkaConsumer: Send + Sync {
     /// Receive next KafkaMessage within the given timeout (milliseconds).
     /// Returns Ok(None) on timeout without a message.
     async fn recv_next(&self, timeout_ms: u64) -> Result<Option<KafkaMessage>>;
+    /// Stop the consumer and clean up resources
+    async fn stop(&self) -> Result<()>;
 }
 
 struct TopicMetadata {
@@ -530,6 +573,17 @@ impl CoreKafkaConsumer for RdKafkaConsumer {
                 Ok(Some(msg))
             }
         }
+    }
+
+    async fn stop(&self) -> Result<()> {
+        // Clear partition assignment before cleanup
+        use rdkafka::topic_partition_list::TopicPartitionList;
+        let empty_tpl = TopicPartitionList::new();
+        self.inner_consumer.assign(&empty_tpl)?;
+
+        // Unsubscribe from all topics to clean up
+        self.inner_consumer.unsubscribe();
+        Ok(())
     }
 }
 

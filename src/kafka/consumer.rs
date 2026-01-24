@@ -359,7 +359,7 @@ impl KafkaConsumer {
             }
 
             // Consume a message with timeout
-            let message_result = match timeout(Duration::from_secs(1), consumer.recv()).await {
+            let message_result = match timeout(Duration::from_millis(200), consumer.recv()).await {
                 Ok(result) => result,
                 Err(_) => {
                     // Timeout occurred, check if we should continue
@@ -371,9 +371,9 @@ impl KafkaConsumer {
                     // If we've been trying for a while with no messages, consider breaking
                     if !self.config.live
                         && message_count == 0
-                        && start_time.elapsed() > Duration::from_secs(5)
+                        && start_time.elapsed() > Duration::from_secs(2)
                     {
-                        debug!("No messages received after 5 seconds, considering topic empty");
+                        debug!("No messages received after 2 seconds, considering topic empty");
                         break;
                     }
 
