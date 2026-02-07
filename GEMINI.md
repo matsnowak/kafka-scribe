@@ -26,6 +26,21 @@ cat kafka_scribe_task_list.md
 cargo test
 ```
 
+### ✅ Quick Verification (Local)
+
+Run these to verify the environment is sane:
+
+```bash
+# 1. Start Kafka
+cd tests/fixtures && docker-compose up -d
+
+# 2. Generate Data
+./scripts/generate_test_data.sh
+
+# 3. Store Messages (runs app)
+./run_local.sh
+```
+
 ## 🤝 Rules of Engagement
 
 1.  **Check Dependencies**: Don't start a task if dependencies aren't ready.
