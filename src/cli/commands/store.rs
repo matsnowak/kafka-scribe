@@ -441,13 +441,28 @@ impl StoreCommand {
         let random_group_id = format!("kafka-scribe-{}", uuid::Uuid::new_v4());
         info!("Using random group ID: {}", random_group_id);
 
+        let storage_backend = if let Some(dir) = &self.to_dir {
+            StoreKafkaToStorageBackend::Directory(dir.clone())
+        } else {
+            return Err(anyhow::anyhow!(
+                "Destination not supported or unspecified. Only --to-dir is currently supported."
+            ));
+        };
+
+        let from = if self.from_beginning {
+            StoreKafkaFrom::FromBegining
+        } else {
+            //TODO: add parsing here
+            StoreKafkaFrom::FromEnd
+        };
+
         let command = StoreKafkaCommand {
             bootstrap_servers: self.bootstrap_servers.clone(),
             topic: self.topic.clone(),
             group_id: random_group_id,
-            from: StoreKafkaFrom::FromBegining,
+            from,
             to: StoreKafkaTo::Live,
-            store_to_storage: StoreKafkaToStorageBackend::Directory("test-storage".to_string()),
+            store_to_storage: storage_backend,
         };
         crate::core::store_usecase::store(command).await
     }

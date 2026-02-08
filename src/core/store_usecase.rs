@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 use crate::core::models::KafkaMessage;
 use crate::storage::files::DirectoryStorage;
 use crate::storage::files::DirectoryStorageConfig;
-use crate::storage::{StorageBackend};
+use crate::storage::StorageBackend;
 
 #[derive(Debug)]
 pub struct StoreKafkaCommand {
@@ -255,7 +255,6 @@ where
     D: StorageBackend,
 {
     let channel_capacity = 100;
-    
 
     PumpTask {
         consumer: consumer.clone(),
@@ -286,11 +285,13 @@ pub fn parse_topic_assignment(
             let mut topic_partition_list = TopicPartitionList::new();
             if let Some(topic_meta) = metadata.topic_metadata() {
                 for partition in topic_meta.partitions() {
-                    topic_partition_list.add_partition_offset(
-                        &store_kafka_command.topic,
-                        partition.id(),
-                        Offset::Beginning,
-                    );
+                    topic_partition_list
+                        .add_partition_offset(
+                            &store_kafka_command.topic,
+                            partition.id(),
+                            Offset::Beginning,
+                        )
+                        .expect("Failed to add partition offset");
                 }
             }
             TopicPartitionsAssignment::from_rdkafka(topic_partition_list)
@@ -299,11 +300,13 @@ pub fn parse_topic_assignment(
             let mut topic_partition_list = TopicPartitionList::new();
             if let Some(topic_meta) = metadata.topic_metadata() {
                 for partition in topic_meta.partitions() {
-                    topic_partition_list.add_partition_offset(
-                        &store_kafka_command.topic,
-                        partition.id(),
-                        Offset::End,
-                    );
+                    topic_partition_list
+                        .add_partition_offset(
+                            &store_kafka_command.topic,
+                            partition.id(),
+                            Offset::End,
+                        )
+                        .expect("Failed to add partition offset");
                 }
             }
             TopicPartitionsAssignment::from_rdkafka(topic_partition_list)
