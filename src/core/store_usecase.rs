@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,7 @@ use rdkafka::{
     topic_partition_list::{Offset, TopicPartitionList},
     util::Timeout,
 };
+use regex::Regex;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -30,12 +32,20 @@ pub struct StoreKafkaCommand {
     pub(crate) from: StoreKafkaFrom,
     pub(crate) to: StoreKafkaTo,
     pub(crate) store_to_storage: StoreKafkaToStorageBackend,
+    pub(crate) key_regex: Option<String>,
+    pub(crate) headers: Option<HashMap<String, String>>,
+    pub(crate) partitions: Option<Vec<i32>>,
+    pub(crate) limit_count: Option<u64>,
+    pub(crate) limit_until_offset: Option<u64>,
+    pub(crate) limit_until_timestamp: Option<i64>,
 }
 
 #[derive(Debug)]
 pub enum StoreKafkaFrom {
     FromBegining,
     FromEnd,
+    FromTimestamp(i64),
+    FromOffset(u64),
 }
 
 #[derive(Debug)]
@@ -86,7 +96,12 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
     let topic_metadata = consumer.fetch_metadata().await?;
     print_metadata(&topic_metadata);
 
-    let topic_assigment = parse_topic_assignment(&command, &topic_metadata);
+    let mut topic_assigment = parse_topic_assignment(&command, &topic_metadata);
+
+    if let StoreKafkaFrom::FromTimestamp(_) = command.from {
+        topic_assigment = consumer.offsets_for_times(topic_assigment, 10000).await?;
+    }
+
     consumer.assign(topic_assigment).await?;
 
     let topic_offset_positions = consumer.fetch_offset_positions().await?;
@@ -100,7 +115,7 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
         .await
         .map_err(|e| anyhow::anyhow!("Storage init error: {}", e))?;
 
-    let pump_task = create_task(consumer.clone(), storage.clone());
+    let pump_task = create_task(consumer.clone(), storage.clone(), &command)?;
 
     // Set up signal handling for graceful shutdown
     let ctrl_c = async {
@@ -160,6 +175,8 @@ where
     consumer: Arc<S>,
     storage: Arc<D>,
     channel_capacity: usize,
+    filter: MessageFilter,
+    limits: MessageLimits,
 }
 
 impl<S, D> PumpTask<S, D>
@@ -167,11 +184,19 @@ where
     S: CoreKafkaConsumer + 'static,
     D: StorageBackend + 'static,
 {
-    pub fn new(consumer: Arc<S>, storage: Arc<D>, channel_capacity: usize) -> Self {
+    pub fn new(
+        consumer: Arc<S>,
+        storage: Arc<D>,
+        channel_capacity: usize,
+        filter: MessageFilter,
+        limits: MessageLimits,
+    ) -> Self {
         Self {
             consumer,
             storage,
             channel_capacity,
+            filter,
+            limits,
         }
     }
 
@@ -180,6 +205,8 @@ where
         let (tx, mut rx) = mpsc::channel::<KafkaMessage>(self.channel_capacity);
         let consumer = self.consumer;
         let storage = self.storage;
+        let filter = self.filter; // Move filter to async block
+        let limits = self.limits; // Move limits to async block
         info!("Starting PumpTask");
 
         // Producer task: read from Kafka and send to channel
@@ -190,11 +217,25 @@ where
             loop {
                 match consumer.recv_next(200).await {
                     Ok(Some(msg)) => {
-                        if tx.send(msg).await.is_err() {
-                            // Receiver dropped, stop producing
-                            break;
+                        // Apply filter
+                        if filter.matches(&msg) {
+                            // Check limits
+                            if limits.should_stop_before(&msg) {
+                                info!("Limit reached (before processing), stopping consumer");
+                                break;
+                            }
+
+                            if tx.send(msg.clone()).await.is_err() {
+                                // Receiver dropped, stop producing
+                                break;
+                            }
+                            produced += 1;
+
+                            if limits.should_stop_after(&msg, produced) {
+                                info!("Limit reached (after processing), stopping consumer");
+                                break;
+                            }
                         }
-                        produced += 1;
                         last_message_at = Instant::now();
                     }
                     Ok(None) => {
@@ -249,17 +290,137 @@ where
         Ok(consumed)
     }
 }
-fn create_task<S, D>(consumer: Arc<S>, storage: Arc<D>) -> PumpTask<S, D>
+fn create_task<S, D>(
+    consumer: Arc<S>,
+    storage: Arc<D>,
+    command: &StoreKafkaCommand,
+) -> Result<PumpTask<S, D>>
 where
     S: CoreKafkaConsumer,
     D: StorageBackend,
 {
     let channel_capacity = 100;
+    let filter = MessageFilter::new(command)?;
+    let limits = MessageLimits::new(command);
 
-    PumpTask {
+    Ok(PumpTask {
         consumer: consumer.clone(),
         storage: storage.clone(),
         channel_capacity,
+        filter,
+        limits,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct MessageLimits {
+    count: Option<u64>,
+    until_offset: Option<u64>,
+    until_timestamp: Option<i64>,
+}
+
+impl MessageLimits {
+    fn new(command: &StoreKafkaCommand) -> Self {
+        Self {
+            count: command.limit_count,
+            until_offset: command.limit_until_offset,
+            until_timestamp: command.limit_until_timestamp,
+        }
+    }
+
+    fn should_stop_before(&self, message: &KafkaMessage) -> bool {
+        if let Some(timestamp_limit) = self.until_timestamp {
+            if let Some(msg_ts) = message.timestamp {
+                if msg_ts >= timestamp_limit {
+                    return true;
+                }
+            }
+        }
+
+        if let Some(offset_limit) = self.until_offset {
+            if message.offset >= offset_limit as i64 {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn should_stop_after(&self, _message: &KafkaMessage, produced_count: u64) -> bool {
+        if let Some(count_limit) = self.count {
+            if produced_count >= count_limit {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+struct MessageFilter {
+    key_regex: Option<Regex>,
+    headers: Option<HashMap<String, String>>,
+    partitions: Option<Vec<i32>>,
+}
+
+impl MessageFilter {
+    fn new(command: &StoreKafkaCommand) -> Result<Self> {
+        let key_regex = if let Some(pattern) = &command.key_regex {
+            Some(
+                Regex::new(pattern)
+                    .map_err(|e| anyhow::anyhow!("Invalid key regex: '{}': {}", pattern, e))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Self {
+            key_regex,
+            headers: command.headers.clone(),
+            partitions: command.partitions.clone(),
+        })
+    }
+
+    fn matches(&self, message: &KafkaMessage) -> bool {
+        // Filter by partition
+        if let Some(partitions) = &self.partitions {
+            if !partitions.contains(&message.partition) {
+                return false;
+            }
+        }
+
+        // Filter by key regex
+        if let Some(regex) = &self.key_regex {
+            if let Some(key) = &message.key {
+                if let Ok(key_str) = std::str::from_utf8(key) {
+                    if !regex.is_match(key_str) {
+                        return false;
+                    }
+                } else {
+                    // If key is not valid UTF-8, it doesn't match a string regex
+                    return false;
+                }
+            } else {
+                // No key, doesn't match
+                return false;
+            }
+        }
+
+        // Filter by headers
+        if let Some(filter_headers) = &self.headers {
+            let msg_headers = &message.headers;
+            for (k, v) in filter_headers {
+                if let Some(msg_val) = msg_headers.get(k) {
+                    if msg_val != v {
+                        return false;
+                    }
+                } else {
+                    // Header missing
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 }
 
@@ -305,6 +466,36 @@ pub fn parse_topic_assignment(
                             &store_kafka_command.topic,
                             partition.id(),
                             Offset::End,
+                        )
+                        .expect("Failed to add partition offset");
+                }
+            }
+            TopicPartitionsAssignment::from_rdkafka(topic_partition_list)
+        }
+        StoreKafkaFrom::FromTimestamp(ts) => {
+            let mut topic_partition_list = TopicPartitionList::new();
+            if let Some(topic_meta) = metadata.topic_metadata() {
+                for partition in topic_meta.partitions() {
+                    topic_partition_list
+                        .add_partition_offset(
+                            &store_kafka_command.topic,
+                            partition.id(),
+                            Offset::Offset(ts),
+                        )
+                        .expect("Failed to add partition offset");
+                }
+            }
+            TopicPartitionsAssignment::from_rdkafka(topic_partition_list)
+        }
+        StoreKafkaFrom::FromOffset(offset) => {
+            let mut topic_partition_list = TopicPartitionList::new();
+            if let Some(topic_meta) = metadata.topic_metadata() {
+                for partition in topic_meta.partitions() {
+                    topic_partition_list
+                        .add_partition_offset(
+                            &store_kafka_command.topic,
+                            partition.id(),
+                            Offset::Offset(offset as i64),
                         )
                         .expect("Failed to add partition offset");
                 }
@@ -377,6 +568,12 @@ pub trait CoreKafkaConsumer: Send + Sync {
     async fn recv_next(&self, timeout_ms: u64) -> Result<Option<KafkaMessage>>;
     /// Stop the consumer and clean up resources
     async fn stop(&self) -> Result<()>;
+    /// Look up offsets for times
+    async fn offsets_for_times(
+        &self,
+        tpl: TopicPartitionsAssignment,
+        timeout_ms: u64,
+    ) -> Result<TopicPartitionsAssignment>;
 }
 
 struct TopicMetadata {
@@ -580,6 +777,17 @@ impl CoreKafkaConsumer for RdKafkaConsumer {
         // Unsubscribe from all topics to clean up
         self.inner_consumer.unsubscribe();
         Ok(())
+    }
+
+    async fn offsets_for_times(
+        &self,
+        tpl: TopicPartitionsAssignment,
+        timeout_ms: u64,
+    ) -> Result<TopicPartitionsAssignment> {
+        let result = self
+            .inner_consumer
+            .offsets_for_times(tpl.inner, Timeout::After(Duration::from_millis(timeout_ms)))?;
+        Ok(TopicPartitionsAssignment::from_rdkafka(result))
     }
 }
 

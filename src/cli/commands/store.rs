@@ -451,9 +451,25 @@ impl StoreCommand {
 
         let from = if self.from_beginning {
             StoreKafkaFrom::FromBegining
+        } else if let Some(ts) = self.from_timestamp {
+            StoreKafkaFrom::FromTimestamp(ts)
         } else {
-            //TODO: add parsing here
             StoreKafkaFrom::FromEnd
+        };
+
+        let headers_map = if let Some(header_strings) = &self.header {
+            let mut h = HashMap::new();
+            for header_str in header_strings {
+                let parts: Vec<&str> = header_str.split('=').collect();
+                if parts.len() == 2 {
+                    h.insert(parts[0].to_string(), parts[1].to_string());
+                } else {
+                    warn!("Invalid header format: {}", header_str);
+                }
+            }
+            Some(h)
+        } else {
+            None
         };
 
         let command = StoreKafkaCommand {
@@ -463,6 +479,12 @@ impl StoreCommand {
             from,
             to: StoreKafkaTo::Live,
             store_to_storage: storage_backend,
+            key_regex: self.key_regex.clone(),
+            headers: headers_map,
+            partitions: self.partitions.clone(),
+            limit_count: self.count,
+            limit_until_offset: self.until_offset,
+            limit_until_timestamp: self.until_timestamp,
         };
         crate::core::store_usecase::store(command).await
     }

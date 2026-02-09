@@ -225,7 +225,7 @@ pub fn generate_header_filtered_test_messages() -> Vec<TestMessage> {
         let value = json!({
             "id": i,
             "region": "us",
-            "data": random_string(10),
+            "data": i * 11,
         });
 
         let mut headers = HashMap::new();

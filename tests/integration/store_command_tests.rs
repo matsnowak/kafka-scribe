@@ -192,7 +192,6 @@ async fn test_store_to_file() -> Result<()> {
 }
 
 /// Test that the `store` command can filter messages by key regex.
-#[ignore]
 #[tokio::test]
 async fn test_store_with_key_regex_filter() -> Result<()> {
     // Initialize test environment
@@ -307,7 +306,6 @@ async fn test_store_with_key_regex_filter() -> Result<()> {
 
 /// Test that the `store` command can filter messages by header value.
 #[tokio::test]
-#[ignore]
 async fn test_store_with_header_filter() -> Result<()> {
     // Initialize test environment
     let docker = init_test_environment();
@@ -445,7 +443,6 @@ async fn test_store_with_header_filter() -> Result<()> {
 }
 
 /// Test that the `store` command can filter messages by partition.
-#[ignore]
 #[tokio::test]
 async fn test_store_with_partition_filter() -> Result<()> {
     // Initialize test environment
