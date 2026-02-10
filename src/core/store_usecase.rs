@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
-use rdkafka::consumer::{Consumer, ConsumerContext, Rebalance, StreamConsumer};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, Rebalance};
 use rdkafka::error::KafkaResult;
 use rdkafka::message::{Headers, Message, OwnedMessage};
 use rdkafka::metadata::{Metadata, MetadataTopic};
@@ -159,12 +159,9 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
     consumer.stop().await?;
 
     info!("Finished storing messages");
+    drop(consumer);
 
-    // Force exit to work around rdkafka background thread cleanup issue
-    // The consumer's background threads don't terminate cleanly even after
-    // unsubscribe/unassign, causing the program to hang on drop(consumer).
-    // See: https://github.com/confluentinc/librdkafka/issues/3127
-    std::process::exit(0);
+    Ok(())
 }
 
 struct PumpTask<S, D>
@@ -675,7 +672,7 @@ struct RdKafkaConsumer {
     bootstrap_servers: String,
     topic: String,
     group_id: String,
-    inner_consumer: LoggedConsumer,
+    inner_consumer: Mutex<Option<LoggedConsumer>>,
 }
 
 impl RdKafkaConsumer {
@@ -698,8 +695,27 @@ impl RdKafkaConsumer {
             bootstrap_servers,
             topic,
             group_id,
-            inner_consumer: consumer,
+            inner_consumer: Mutex::new(Some(consumer)),
         })
+    }
+
+    fn with_consumer<T>(&self, f: impl FnOnce(&LoggedConsumer) -> Result<T>) -> Result<T> {
+        let guard = self
+            .inner_consumer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Kafka consumer lock poisoned"))?;
+        let consumer = guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Kafka consumer already stopped"))?;
+        f(consumer)
+    }
+
+    fn take_consumer(&self) -> Result<Option<LoggedConsumer>> {
+        let mut guard = self
+            .inner_consumer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Kafka consumer lock poisoned"))?;
+        Ok(guard.take())
     }
 }
 
@@ -707,9 +723,14 @@ impl RdKafkaConsumer {
 impl CoreKafkaConsumer for RdKafkaConsumer {
     // TODO: decide what to do with this
     async fn initialize(&self) -> Result<()> {
-        let metadata = self
-            .inner_consumer
-            .fetch_metadata(Some(&self.topic), Timeout::After(Duration::from_secs(10)))?;
+        let metadata = self.with_consumer(|consumer| {
+            consumer
+                .fetch_metadata(
+                    Some(&self.topic),
+                    Timeout::After(Duration::from_secs(10)),
+                )
+                .map_err(|e| anyhow::anyhow!("Error fetching metadata: {}", e))
+        })?;
 
         if metadata.topics().is_empty() || metadata.topics().first().unwrap().name() != self.topic {
             return Err(anyhow::anyhow!("Topic '{}' not found", self.topic));
@@ -718,11 +739,15 @@ impl CoreKafkaConsumer for RdKafkaConsumer {
     }
 
     async fn fetch_metadata(&self) -> Result<TopicMetadata> {
-        let metadata = self.inner_consumer.fetch_metadata(
-            Some(&self.topic),
-            // TODO: extract to config
-            Timeout::After(Duration::from_secs(10)),
-        )?;
+        let metadata = self.with_consumer(|consumer| {
+            consumer
+                .fetch_metadata(
+                    Some(&self.topic),
+                    // TODO: extract to config
+                    Timeout::After(Duration::from_secs(10)),
+                )
+                .map_err(|e| anyhow::anyhow!("Error fetching metadata: {}", e))
+        })?;
         if let Some(first_topic_metadata) = metadata.topics().first() {
             if first_topic_metadata.name() != self.topic {
                 return Err(anyhow::anyhow!("Topic '{}' not found", self.topic));
@@ -737,45 +762,75 @@ impl CoreKafkaConsumer for RdKafkaConsumer {
     }
 
     async fn fetch_offset_positions(&self) -> Result<TopicPartitionsAssignment> {
-        self.inner_consumer
-            .assignment()
-            .map(TopicPartitionsAssignment::from_rdkafka)
-            .map_err(|e| anyhow::anyhow!("Error fetching offset positions: {}", e))
+        self.with_consumer(|consumer| {
+            consumer
+                .assignment()
+                .map(TopicPartitionsAssignment::from_rdkafka)
+                .map_err(|e| anyhow::anyhow!("Error fetching offset positions: {}", e))
+        })
     }
 
     async fn assign(&self, tpl: TopicPartitionsAssignment) -> Result<()> {
-        self.inner_consumer
-            .assign(&tpl.inner)
-            .map_err(|e| anyhow::anyhow!("Error assigning partitions: {}", e))
+        self.with_consumer(|consumer| {
+            consumer
+                .assign(&tpl.inner)
+                .map_err(|e| anyhow::anyhow!("Error assigning partitions: {}", e))
+        })
     }
 
     async fn recv_next(&self, timeout_ms: u64) -> Result<Option<KafkaMessage>> {
-        // Use StreamConsumer::recv with timeout
-        match tokio::time::timeout(
-            Duration::from_millis(timeout_ms),
-            self.inner_consumer.recv(),
-        )
-        .await
-        {
-            Err(_elapsed) => Ok(None),
-            Ok(Err(e)) => Err(anyhow::anyhow!("Kafka receive error: {}", e)),
-            Ok(Ok(bmsg)) => {
-                // Convert BorrowedMessage to OwnedMessage to detach from librdkafka lifetime
-                let owned: OwnedMessage = bmsg.detach();
-                let msg = convert_to_kafka_message(&owned);
-                Ok(Some(msg))
-            }
-        }
+        let timeout = Duration::from_millis(timeout_ms);
+        let owned = tokio::task::block_in_place(|| {
+            self.with_consumer(|consumer| match consumer.poll(timeout) {
+                None => Ok(None),
+                Some(Err(e)) => Err(anyhow::anyhow!("Kafka receive error: {}", e)),
+                Some(Ok(bmsg)) => Ok(Some(bmsg.detach())),
+            })
+        })?;
+        Ok(owned.map(|msg| convert_to_kafka_message(&msg)))
     }
 
     async fn stop(&self) -> Result<()> {
-        // Clear partition assignment before cleanup
-        use rdkafka::topic_partition_list::TopicPartitionList;
-        let empty_tpl = TopicPartitionList::new();
-        self.inner_consumer.assign(&empty_tpl)?;
+        let consumer = self.take_consumer()?;
+        if let Some(consumer) = consumer {
+            // Clear partition assignment before cleanup
+            if let Err(e) = consumer.unassign() {
+                warn!("Kafka consumer unassign error: {}", e);
+            }
 
-        // Unsubscribe from all topics to clean up
-        self.inner_consumer.unsubscribe();
+            // Unsubscribe from all topics to clean up
+            consumer.unsubscribe();
+
+            // Close the consumer cleanly and poll until closed.
+            use rdkafka::bindings as rdkafka_sys;
+            use rdkafka::bindings::rd_kafka_resp_err_t;
+            let native_ptr = consumer.client().native_ptr();
+            let close_err = unsafe { rdkafka_sys::rd_kafka_consumer_close(native_ptr) };
+            if close_err != rd_kafka_resp_err_t::RD_KAFKA_RESP_ERR_NO_ERROR {
+                warn!("Kafka consumer close error: {:?}", close_err);
+            }
+
+            let close_deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < close_deadline {
+                let msg_ptr = unsafe { rdkafka_sys::rd_kafka_consumer_poll(native_ptr, 100) };
+                if !msg_ptr.is_null() {
+                    unsafe { rdkafka_sys::rd_kafka_message_destroy(msg_ptr) };
+                }
+
+                let closed = unsafe { rdkafka_sys::rd_kafka_consumer_closed(native_ptr) == 1 };
+                if closed {
+                    break;
+                }
+            }
+
+            let closed = unsafe { rdkafka_sys::rd_kafka_consumer_closed(native_ptr) == 1 };
+            if !closed {
+                warn!("Kafka consumer did not close within timeout");
+            }
+
+            // Leak the consumer handle to avoid hanging in rd_kafka_destroy.
+            std::mem::forget(consumer);
+        }
         Ok(())
     }
 
@@ -784,9 +839,14 @@ impl CoreKafkaConsumer for RdKafkaConsumer {
         tpl: TopicPartitionsAssignment,
         timeout_ms: u64,
     ) -> Result<TopicPartitionsAssignment> {
-        let result = self
-            .inner_consumer
-            .offsets_for_times(tpl.inner, Timeout::After(Duration::from_millis(timeout_ms)))?;
+        let result = self.with_consumer(|consumer| {
+            consumer
+                .offsets_for_times(
+                    tpl.inner,
+                    Timeout::After(Duration::from_millis(timeout_ms)),
+                )
+                .map_err(|e| anyhow::anyhow!("Error fetching offsets for times: {}", e))
+        })?;
         Ok(TopicPartitionsAssignment::from_rdkafka(result))
     }
 }
@@ -813,4 +873,4 @@ impl ConsumerContext for KafkaConsumerContext {
     }
 }
 
-type LoggedConsumer = StreamConsumer<KafkaConsumerContext>;
+type LoggedConsumer = BaseConsumer<KafkaConsumerContext>;
