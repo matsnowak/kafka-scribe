@@ -49,6 +49,9 @@ Thumbs.db
 *.swo
 *~
 
+# Claude Code agents (private config, not for public repo)
+.claude/
+
 # Temporary files
 *.tmp
 *.temp
