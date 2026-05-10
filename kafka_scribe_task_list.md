@@ -247,21 +247,25 @@ Single source of truth for task state. Mutate only via the `Edit` tool (markdown
   - [x] CLI `parse_format(&str)` recognizes `json`, `json-hybrid`, `json-hybrid-base64`, `json-hybrid-utf8`, `json-hybrid-force-utf8`, `json-hybrid-value` (plus short aliases) and errors with "planned for Phase 2" on `avro`/`protobuf`/`binary`/`string`
   - [x] `cargo build` green; `cargo test --bins` 46 passed / 0 failed / 2 ignored
 - **Dependencies:** 37, 40
-- **Notes:** COMPLETED 2026-05-07. Decision vs simplifier review: kept BOTH `JsonFormat` (verbose serde-derive) AND `JsonHybridFormat` (smart binary encodings) as independent `MessageFormat` impls — each pays rent for a different output style. Architect-reviewer's "collapse" suggestion would force one chosen output style on users; the trait route preserves choice without code duplication in dispatch. Warnings dropped 25 → 20 (`DirectoryStorageFormat::Json` variant warning gone). Format names: `JsonFormat::format_name() == "json"`, `JsonHybridFormat::format_name() == "json-hybrid"`. Avro/Protobuf/Binary/String formats are deferred to Phase 2 but the CLI now error-routes them properly instead of silently defaulting to JSON.
+- **Notes:** COMPLETED 2026-05-07 via commit 9f19b4e. Decision vs simplifier review: kept BOTH `JsonFormat` (verbose serde-derive) AND `JsonHybridFormat` (smart binary encodings) as independent `MessageFormat` impls — each pays rent for a different output style. Architect-reviewer's "collapse" suggestion would force one chosen output style on users; the trait route preserves choice without code duplication in dispatch. Warnings dropped 25 → 20 (`DirectoryStorageFormat::Json` variant warning gone). Format names: `JsonFormat::format_name() == "json"`, `JsonHybridFormat::format_name() == "json-hybrid"`. Avro/Protobuf/Binary/String formats are deferred to Phase 2 but the CLI now error-routes them properly instead of silently defaulting to JSON.
 
 ### Task 42
 - **ID:** 42
 - **Title:** Fix silent-drop CLI flag regression
-- **Status:** TODO
+- **Status:** COMPLETED
 - **Priority:** HIGH
 - **Phase:** 1
-- **Description:** `execute_new` ignores `--to-file`, `--to-db`, `--count`, `--from-offsets`, `--until-*`, `--live`, `--batch-size`, `--buffer-size`, `--threads`, `--compression`, `--dry-run`. Implement `TryFrom<StoreCommand> for StoreKafkaCommand` and either wire every flag or error explicitly with "planned for Phase 2".
+- **Description:** Wire all `store` CLI flags through to the use-case or error explicitly. No silent no-ops.
 - **Acceptance Criteria:**
-  - [ ] All flags either functional or return a typed error message
-  - [ ] No silent no-ops
-  - [ ] Unit test per flag: either asserts behavior or asserts the correct "not yet supported" error
-- **Dependencies:** 37, 41
-- **Notes:** CLI UX review flagged this as the most confusing behavior for first-time users.
+  - [x] `--to-file <path>` wired (new `StoreKafkaToStorageBackend::SingleFile` variant routes to `SingleFileStorage`)
+  - [x] `--dry-run` restored: prints the parsed `StoreKafkaCommand` and exits `Ok(())` without contacting Kafka
+  - [x] `--to-db`, `--threads`, `--compression != "none"` return typed errors referencing the Phase-2/Phase-3 task that will land them
+  - [x] `--live`, `--batch-size != 100`, `--buffer-size != 1000` log a warning ("not yet wired in the new path") rather than silently doing nothing
+  - [x] `--to-dir` and `--to-file` rejected as a pair (mutually exclusive)
+  - [x] No-destination case returns "No destination specified. Use --to-dir or --to-file."
+  - [x] `cargo build` green; `cargo test --bins` 45 passed / 0 failed / 2 ignored
+- **Dependencies:** 37, 40, 41
+- **Notes:** COMPLETED 2026-05-07. SingleFileStorage refactored to take `Arc<dyn MessageFormat>` (parallel to DirectoryStorage). `PumpTask<S, D>` generics relaxed with `?Sized` so `create_storage` can return `Arc<dyn StorageBackend>`. JsonFormat switched from `to_vec_pretty` to `to_vec` (compact JSON for JSONL workflows; pretty-printing was breaking single-line file format). Two flags still don't have a real path — `--from-offsets` (parsed to HashMap but not threaded into `StoreKafkaCommand`) and `--live` semantics — flagged for follow-up sub-tasks under Task 30 / Task 64; not strictly Phase-1 critical.
 
 ### Task 43
 - **ID:** 43

@@ -200,15 +200,57 @@ impl StoreCommand {
     }
 
     pub async fn execute(&self) -> Result<()> {
+        // Phase-2 flags: explicit error instead of silent no-op (Task 42).
+        if self.to_db.is_some() {
+            return Err(anyhow::anyhow!(
+                "--to-db is planned for Phase 2 (SQLite lands in Task 8, PostgreSQL in Task 9)."
+            ));
+        }
+        if self.threads.is_some() {
+            return Err(anyhow::anyhow!(
+                "--threads (per-partition parallelism) is planned for Phase 3 (Task 79)."
+            ));
+        }
+        if self.compression != "none" {
+            return Err(anyhow::anyhow!(
+                "--compression is planned for Phase 2; got '{}'. Pass --compression none for now.",
+                self.compression
+            ));
+        }
+        // --live, --batch-size, --buffer-size: not yet wired to consumer config
+        // (legacy fields from the deleted first-gen path). Surfacing a warning
+        // keeps the user informed without breaking scripts that pass defaults.
+        if self.live {
+            warn!("--live is not yet wired in the new path; ignored.");
+        }
+        if self.batch_size != 100 {
+            warn!("--batch-size is not yet wired in the new path; ignored (got {}).", self.batch_size);
+        }
+        if self.buffer_size != 1000 {
+            warn!(
+                "--buffer-size is not yet wired in the new path; ignored (got {}). \
+                 Channel cap is hardcoded at 100 — see Task 30.",
+                self.buffer_size
+            );
+        }
+
         let random_group_id = format!("kafka-scribe-{}", uuid::Uuid::new_v4());
         info!("Using random group ID: {}", random_group_id);
 
-        let storage_backend = if let Some(dir) = &self.to_dir {
-            StoreKafkaToStorageBackend::Directory(dir.clone())
-        } else {
-            return Err(anyhow::anyhow!(
-                "Destination not supported or unspecified. Only --to-dir is currently supported."
-            ));
+        let storage_backend = match (&self.to_dir, &self.to_file) {
+            (Some(dir), None) => StoreKafkaToStorageBackend::Directory(dir.clone()),
+            (None, Some(file)) => StoreKafkaToStorageBackend::SingleFile(file.clone()),
+            (Some(_), Some(_)) => {
+                return Err(anyhow::anyhow!(
+                    "--to-dir and --to-file are mutually exclusive."
+                ));
+            }
+            (None, None) => {
+                return Err(anyhow::anyhow!(
+                    "No destination specified. Use --to-dir or --to-file. \
+                     (--to-db is planned for Phase 2.)"
+                ));
+            }
         };
 
         let from = if self.from_beginning {
@@ -251,6 +293,15 @@ impl StoreCommand {
             limit_until_offset: self.until_offset,
             limit_until_timestamp: self.until_timestamp,
         };
+
+        if self.dry_run {
+            // --dry-run: print the parsed command and exit successfully without
+            // contacting Kafka or touching the filesystem.
+            info!("--dry-run: would execute the following command:");
+            info!("{:#?}", command);
+            return Ok(());
+        }
+
         crate::core::store_usecase::store(command).await
     }
 }
@@ -550,14 +601,11 @@ mod tests {
         // Execute the command
         let result = cmd.execute().await;
 
-        // Check that the result is an error with the expected message.
-        // After Task 37 cleanup the new path returns
-        // "Destination not supported or unspecified". Task 42 will restore
-        // a clearer "No destination specified" error and fully wire `--to-file`/`--to-db`.
+        // Task 42: clear, actionable error message restored.
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("Destination not supported or unspecified"),
+            err.contains("No destination specified"),
             "unexpected error: {err}"
         );
     }

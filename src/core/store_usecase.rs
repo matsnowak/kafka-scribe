@@ -21,7 +21,9 @@ use tracing::{debug, error, info};
 
 use crate::core::format::MessageFormat;
 use crate::core::models::KafkaMessage;
-use crate::storage::files::{DirectoryStorage, DirectoryStorageConfig};
+use crate::storage::files::{
+    DirectoryStorage, DirectoryStorageConfig, SingleFileStorage, SingleFileStorageConfig,
+};
 use crate::storage::StorageBackend;
 
 // ---------------------------------------------------------------------------
@@ -74,7 +76,10 @@ pub enum StoreKafkaFrom {
 
 #[derive(Debug)]
 pub enum StoreKafkaToStorageBackend {
+    /// One file per message under `<base_dir>/<topic>/partition-<n>/<offset>.<ext>`.
     Directory(String),
+    /// All messages appended to a single JSONL file (one serialized message per line).
+    SingleFile(String),
 }
 
 #[derive(Debug)]
@@ -184,7 +189,9 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
 
     let consumer = Arc::new(consumer);
 
-    let storage = Arc::new(create_storage(&command)?);
+    // create_storage returns Arc<dyn StorageBackend> so PumpTask receives
+    // a trait object regardless of which backend was selected.
+    let storage = create_storage(&command)?;
     storage
         .initialize()
         .await
@@ -283,7 +290,11 @@ fn print_topic_offset_positions(tpl: &TopicPartitionsAssignment) {
     }
 }
 
-fn create_storage(command: &StoreKafkaCommand) -> Result<impl StorageBackend> {
+/// Storage trait object: lets `create_storage` return either backend
+/// without paying the cost of an enum + match on every call.
+type DynStorage = Arc<dyn StorageBackend + Send + Sync>;
+
+fn create_storage(command: &StoreKafkaCommand) -> Result<DynStorage> {
     match &command.store_to_storage {
         StoreKafkaToStorageBackend::Directory(path) => {
             let cfg = DirectoryStorageConfig {
@@ -291,7 +302,15 @@ fn create_storage(command: &StoreKafkaCommand) -> Result<impl StorageBackend> {
                 format: command.format.clone(),
                 ..Default::default()
             };
-            Ok(DirectoryStorage::new(cfg))
+            Ok(Arc::new(DirectoryStorage::new(cfg)))
+        }
+        StoreKafkaToStorageBackend::SingleFile(path) => {
+            let cfg = SingleFileStorageConfig {
+                file_path: PathBuf::from(path),
+                format: command.format.clone(),
+                ..Default::default()
+            };
+            Ok(Arc::new(SingleFileStorage::new(cfg)))
         }
     }
 }
@@ -303,8 +322,8 @@ fn create_storage(command: &StoreKafkaCommand) -> Result<impl StorageBackend> {
 
 struct PumpTask<S, D>
 where
-    S: CoreKafkaConsumer,
-    D: StorageBackend,
+    S: CoreKafkaConsumer + ?Sized,
+    D: StorageBackend + ?Sized,
 {
     consumer: Arc<S>,
     storage: Arc<D>,
@@ -315,8 +334,8 @@ where
 
 impl<S, D> PumpTask<S, D>
 where
-    S: CoreKafkaConsumer + 'static,
-    D: StorageBackend + 'static,
+    S: CoreKafkaConsumer + ?Sized + 'static,
+    D: StorageBackend + ?Sized + 'static,
 {
     /// Run the pump task, consuming self to ensure Arc references are dropped
     /// after completion.
@@ -409,8 +428,8 @@ fn create_task<S, D>(
     command: &StoreKafkaCommand,
 ) -> Result<PumpTask<S, D>>
 where
-    S: CoreKafkaConsumer,
-    D: StorageBackend,
+    S: CoreKafkaConsumer + ?Sized,
+    D: StorageBackend + ?Sized,
 {
     let channel_capacity = 100;
     let filter = MessageFilter::new(command)?;

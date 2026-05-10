@@ -78,7 +78,10 @@ impl JsonFormat {
 #[async_trait]
 impl MessageFormat for JsonFormat {
     async fn serialize(&self, message: &KafkaMessage) -> FormatResult<Vec<u8>> {
-        serde_json::to_vec_pretty(message)
+        // Compact (single-line) JSON for JSONL compatibility with single-file
+        // and stream-friendly workflows (jq, grep). Pretty-printing is
+        // available via storage-level options if/when needed.
+        serde_json::to_vec(message)
             .map_err(|e| FormatError::Encoding(format!("Failed to serialize to JSON: {}", e)))
     }
 
