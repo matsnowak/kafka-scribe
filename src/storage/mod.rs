@@ -1,7 +1,7 @@
-#[cfg(feature = "database")]
-pub mod database;
+// `database` (SQLite) module returns in Task 8 as a real implementation
+// at `src/storage/sqlite.rs`. PostgreSQL is Phase 2 (Task 9).
+// `transform` (JS engine via deno_core) is Phase 2 (Task 20).
 pub mod files;
-pub mod transform;
 
 use crate::core::{errors::StorageResult, models::KafkaMessage, models::StorageStats};
 use async_trait::async_trait;

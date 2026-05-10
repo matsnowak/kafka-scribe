@@ -214,23 +214,24 @@ Single source of truth for task state. Mutate only via the `Edit` tool (markdown
   - [ ] Integration tests still green (needs Docker — owner to verify)
   - [ ] ADR-003 written in `docs/ARCHITECTURE_DECISIONS.md` (next sub-task; tracked separately so the boundary commit lands clean)
 - **Dependencies:** 38
-- **Notes:** COMPLETED 2026-05-07. `core/store_usecase.rs` shrunk 876 → 511 LOC (−365). New `src/kafka/consumer.rs` 293 LOC. Domain types (`DomainOffset`) match rdkafka semantics; adapter handles bidirectional TPL/metadata conversion. Removed the unused `StoreUsecase` trait + `StoreUsecaseImpl` struct (vestigial). Warnings 38 → 24. Real hex boundary established. Enables mockall-based unit tests of `PumpTask` (will be exercised in Task 70).
+- **Notes:** COMPLETED 2026-05-07 via commit e47bf83. `core/store_usecase.rs` shrunk 876 → 511 LOC (−365). New `src/kafka/consumer.rs` 293 LOC. Domain types (`DomainOffset`) match rdkafka semantics; adapter handles bidirectional TPL/metadata conversion. Removed the unused `StoreUsecase` trait + `StoreUsecaseImpl` struct (vestigial). Warnings 38 → 24. Real hex boundary established. Enables mockall-based unit tests of `PumpTask` (will be exercised in Task 70).
 
 ### Task 40
 - **ID:** 40
 - **Title:** Delete 2-line stubs and drop `database` feature
-- **Status:** TODO
+- **Status:** COMPLETED
 - **Priority:** HIGH
 - **Phase:** 1
 - **Description:** Remove all stub modules that back no real implementation and remove the `default = ["database"]` feature.
 - **Acceptance Criteria:**
-  - [ ] Deleted: `src/kafka/{producer,mock}.rs`, `src/storage/database/`, `src/storage/transform/`, `src/plugins/`
-  - [ ] `src/utils/{logging,progress,validation}.rs` **retained** (will get real bodies in later tasks)
-  - [ ] `[features]` section in `Cargo.toml` no longer references `database`; `sqlx`/`deno_core`/`serde_yaml` removed if present
-  - [ ] Module `mod.rs` files updated
-  - [ ] `cargo build` green
+  - [x] Deleted: `src/kafka/{producer,mock}.rs`, `src/storage/database/{postgres,sqlite,mod}.rs`, `src/storage/transform/{js_engine,mod}.rs`, `src/plugins/{registry,mod}.rs` (9 files, all 2-line stubs)
+  - [x] `src/utils/{logging,progress,validation}.rs` retained (real bodies in Tasks 53, 59, 66)
+  - [x] `[features] default = ["database"]` removed from `Cargo.toml`; `sqlx` dependency removed (returns in Task 8 as real SQLite impl)
+  - [x] `serde_yaml` retained for now (Task 57 will replace with `serde_yml`/`toml` per security review)
+  - [x] `src/storage/mod.rs`, `src/kafka/mod.rs`, `src/main.rs` updated
+  - [x] `cargo build` green; `cargo test --bins` 45 passed / 0 failed / 2 ignored
 - **Dependencies:** 37
-- **Notes:** `producer.rs` will return as a real impl in Task 44. `sqlite.rs` returns as top-level `src/storage/sqlite.rs` in Task 50.
+- **Notes:** COMPLETED 2026-05-07. `producer.rs` will return as a real impl in Task 44 (replay). SQLite returns as top-level `src/storage/sqlite.rs` in Task 8. The `sqlx-postgres` future-incompatibility warning that was polluting every build is gone now that the dep is removed. Empty subdirs `database/`, `transform/`, `plugins/` removed.
 
 ### Task 41
 - **ID:** 41
