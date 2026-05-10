@@ -1,12 +1,52 @@
 use clap::Args;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Result;
 use tracing::{info, warn};
 
+use crate::core::format::MessageFormat;
 use crate::core::store_usecase::{
     StoreKafkaCommand, StoreKafkaFrom, StoreKafkaTo, StoreKafkaToStorageBackend,
 };
+use crate::formats::{BinaryEncoding, JsonFormat, JsonHybridFormat};
+
+/// Parse `--format <name>` into a concrete `MessageFormat` impl.
+///
+/// Recognized values:
+/// - `json` — strict serde-derived JSON (verbose; binary fields as JSON byte arrays)
+/// - `json-hybrid` (default) — smart binary handling via `BinaryEncoding::Utf8WithFallback`
+/// - `json-hybrid-base64`, `base64` — `BinaryEncoding::Base64`
+/// - `json-hybrid-utf8`, `utf8` — `BinaryEncoding::Utf8WithFallback`
+/// - `json-hybrid-force-utf8`, `force-utf8` — `BinaryEncoding::ForceUtf8`
+/// - `json-hybrid-value`, `value` — `BinaryEncoding::JsonValue` (parse JSON-payloads inline)
+fn parse_format(s: &str) -> Result<Arc<dyn MessageFormat + Send + Sync>> {
+    match s {
+        "json" => Ok(Arc::new(JsonFormat::new())),
+        "json-hybrid" | "hybrid" => Ok(Arc::new(JsonHybridFormat::default())),
+        "json-hybrid-base64" | "base64" => Ok(Arc::new(JsonHybridFormat::with_encoding(
+            BinaryEncoding::Base64,
+        ))),
+        "json-hybrid-utf8" | "utf8" => Ok(Arc::new(JsonHybridFormat::with_encoding(
+            BinaryEncoding::Utf8WithFallback,
+        ))),
+        "json-hybrid-force-utf8" | "force-utf8" => Ok(Arc::new(JsonHybridFormat::with_encoding(
+            BinaryEncoding::ForceUtf8,
+        ))),
+        "json-hybrid-value" | "value" => Ok(Arc::new(JsonHybridFormat::with_encoding(
+            BinaryEncoding::JsonValue,
+        ))),
+        // Phase-2 formats: explicit error instead of silent no-op
+        "avro" | "protobuf" | "binary" | "string" => Err(anyhow::anyhow!(
+            "--format '{}' is planned for Phase 2; v0.1.0 supports json, json-hybrid (and its variants).",
+            s
+        )),
+        other => Err(anyhow::anyhow!(
+            "Unknown --format '{}'. Supported: json, json-hybrid, json-hybrid-base64, json-hybrid-utf8, json-hybrid-force-utf8, json-hybrid-value (or short aliases: hybrid, base64, utf8, force-utf8, value).",
+            other
+        )),
+    }
+}
 
 /// Store messages from a Kafka topic to a storage destination
 ///
@@ -194,6 +234,8 @@ impl StoreCommand {
             None
         };
 
+        let format = parse_format(&self.format)?;
+
         let command = StoreKafkaCommand {
             bootstrap_servers: self.bootstrap_servers.clone(),
             topic: self.topic.clone(),
@@ -201,6 +243,7 @@ impl StoreCommand {
             from,
             to: StoreKafkaTo::Live,
             store_to_storage: storage_backend,
+            format,
             key_regex: self.key_regex.clone(),
             headers: headers_map,
             partitions: self.partitions.clone(),

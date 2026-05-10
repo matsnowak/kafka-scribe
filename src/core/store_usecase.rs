@@ -7,6 +7,7 @@
 //! `rdkafka` — the adapter lives in `crate::kafka::consumer`.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,6 +19,7 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
+use crate::core::format::MessageFormat;
 use crate::core::models::KafkaMessage;
 use crate::storage::files::{DirectoryStorage, DirectoryStorageConfig};
 use crate::storage::StorageBackend;
@@ -26,7 +28,6 @@ use crate::storage::StorageBackend;
 // Use-case input (CLI translator → here)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
 pub struct StoreKafkaCommand {
     pub(crate) bootstrap_servers: String,
     pub(crate) topic: String,
@@ -34,12 +35,33 @@ pub struct StoreKafkaCommand {
     pub(crate) from: StoreKafkaFrom,
     pub(crate) to: StoreKafkaTo,
     pub(crate) store_to_storage: StoreKafkaToStorageBackend,
+    pub(crate) format: Arc<dyn MessageFormat + Send + Sync>,
     pub(crate) key_regex: Option<String>,
     pub(crate) headers: Option<HashMap<String, String>>,
     pub(crate) partitions: Option<Vec<i32>>,
     pub(crate) limit_count: Option<u64>,
     pub(crate) limit_until_offset: Option<u64>,
     pub(crate) limit_until_timestamp: Option<i64>,
+}
+
+impl fmt::Debug for StoreKafkaCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoreKafkaCommand")
+            .field("bootstrap_servers", &self.bootstrap_servers)
+            .field("topic", &self.topic)
+            .field("group_id", &self.group_id)
+            .field("from", &self.from)
+            .field("to", &self.to)
+            .field("store_to_storage", &self.store_to_storage)
+            .field("format", &self.format.format_name())
+            .field("key_regex", &self.key_regex)
+            .field("headers", &self.headers)
+            .field("partitions", &self.partitions)
+            .field("limit_count", &self.limit_count)
+            .field("limit_until_offset", &self.limit_until_offset)
+            .field("limit_until_timestamp", &self.limit_until_timestamp)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -266,6 +288,7 @@ fn create_storage(command: &StoreKafkaCommand) -> Result<impl StorageBackend> {
         StoreKafkaToStorageBackend::Directory(path) => {
             let cfg = DirectoryStorageConfig {
                 base_dir: PathBuf::from(path),
+                format: command.format.clone(),
                 ..Default::default()
             };
             Ok(DirectoryStorage::new(cfg))

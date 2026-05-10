@@ -235,18 +235,19 @@ Single source of truth for task state. Mutate only via the `Edit` tool (markdown
 
 ### Task 41
 - **ID:** 41
-- **Title:** Unify `json.rs` + `json_hybrid.rs`; wire `--format` through `MessageFormat` trait
-- **Status:** TODO
+- **Title:** Wire `--format` through `MessageFormat` trait; drop the storage-format enum
+- **Status:** COMPLETED
 - **Priority:** HIGH
 - **Phase:** 1
-- **Description:** `JsonFormat` is a subset of `JsonHybridFormat` with `BinaryEncoding::Base64`. Collapse them; route `--format` flag through `Arc<dyn MessageFormat>` into storage backends instead of hardcoding JSON.
+- **Description:** `--format` was parsed by clap but never reached storage. Removed `DirectoryStorageFormat` enum, replaced with `Arc<dyn MessageFormat + Send + Sync>` in `DirectoryStorageConfig`, threaded format selection from CLI through `StoreKafkaCommand` to the storage backend.
 - **Acceptance Criteria:**
-  - [ ] Single format module (either thin alias or full collapse)
-  - [ ] `StoreKafkaCommand` carries `Arc<dyn MessageFormat>`
-  - [ ] Storage backends call `format.serialize(&msg)` instead of serde_json directly
-  - [ ] `insta` snapshot tests stay green (or intentionally updated)
-- **Dependencies:** 37
-- **Notes:** Unlocks Tasks 11/12/13/14 conceptually (all just different format impls behind the same trait — but Phase-2 only).
+  - [x] `StoreKafkaCommand` carries `format: Arc<dyn MessageFormat + Send + Sync>` with manual `Debug` impl
+  - [x] `DirectoryStorageConfig.format` is a trait object; default is `JsonHybridFormat` (Utf8WithFallback encoding)
+  - [x] `DirectoryStorage::store_message` calls `self.config.format.serialize(&message).await` (no enum match)
+  - [x] CLI `parse_format(&str)` recognizes `json`, `json-hybrid`, `json-hybrid-base64`, `json-hybrid-utf8`, `json-hybrid-force-utf8`, `json-hybrid-value` (plus short aliases) and errors with "planned for Phase 2" on `avro`/`protobuf`/`binary`/`string`
+  - [x] `cargo build` green; `cargo test --bins` 46 passed / 0 failed / 2 ignored
+- **Dependencies:** 37, 40
+- **Notes:** COMPLETED 2026-05-07. Decision vs simplifier review: kept BOTH `JsonFormat` (verbose serde-derive) AND `JsonHybridFormat` (smart binary encodings) as independent `MessageFormat` impls — each pays rent for a different output style. Architect-reviewer's "collapse" suggestion would force one chosen output style on users; the trait route preserves choice without code duplication in dispatch. Warnings dropped 25 → 20 (`DirectoryStorageFormat::Json` variant warning gone). Format names: `JsonFormat::format_name() == "json"`, `JsonHybridFormat::format_name() == "json-hybrid"`. Avro/Protobuf/Binary/String formats are deferred to Phase 2 but the CLI now error-routes them properly instead of silently defaulting to JSON.
 
 ### Task 42
 - **ID:** 42
