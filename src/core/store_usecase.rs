@@ -1,28 +1,30 @@
+//! Store-command orchestration (pure domain).
+//!
+//! ADR-003: this module owns the `CoreKafkaConsumer` port, the
+//! `StoreKafkaCommand` use-case input, the `PumpTask` pipeline, filtering,
+//! limits, and the rdkafka-free domain types (`TopicMetadata`,
+//! `TopicPartitionsAssignment`, `DomainOffset`). It must not import
+//! `rdkafka` — the adapter lives in `crate::kafka::consumer`.
+
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rdkafka::client::ClientContext;
-use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, Rebalance};
-use rdkafka::error::KafkaResult;
-use rdkafka::message::{Headers, Message, OwnedMessage};
-use rdkafka::metadata::{Metadata, MetadataTopic};
-use rdkafka::{
-    topic_partition_list::{Offset, TopicPartitionList},
-    util::Timeout,
-};
 use regex::Regex;
 use tokio::signal;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::core::models::KafkaMessage;
-use crate::storage::files::DirectoryStorage;
-use crate::storage::files::DirectoryStorageConfig;
+use crate::storage::files::{DirectoryStorage, DirectoryStorageConfig};
 use crate::storage::StorageBackend;
+
+// ---------------------------------------------------------------------------
+// Use-case input (CLI translator → here)
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub struct StoreKafkaCommand {
@@ -58,54 +60,105 @@ pub enum StoreKafkaTo {
     Live,
 }
 
+// ---------------------------------------------------------------------------
+// Domain types (rdkafka-free)
+// ---------------------------------------------------------------------------
+
+/// Snapshot of a topic's partitions, owned and detached from any wire-library
+/// lifetime.
+#[derive(Debug, Clone)]
+pub struct TopicMetadata {
+    pub name: String,
+    pub partitions: Vec<PartitionMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PartitionMetadata {
+    pub id: i32,
+    pub leader: i32,
+    pub replicas: Vec<i32>,
+    pub isr: Vec<i32>,
+}
+
+/// Offset specifier in domain terms.
+///
+/// Matches the semantics of rdkafka's `Offset` enum but without the
+/// dependency. `Offset(i64)` carries either a literal Kafka offset (for
+/// `assign`) or a millisecond timestamp (when used as input to
+/// `offsets_for_times`). The adapter handles the encoding asymmetry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainOffset {
+    Beginning,
+    End,
+    Offset(i64),
+}
+
+#[derive(Debug, Clone)]
+pub struct PartitionOffset {
+    pub topic: String,
+    pub partition: i32,
+    pub offset: DomainOffset,
+}
+
+#[derive(Debug, Clone)]
+pub struct TopicPartitionsAssignment {
+    pub entries: Vec<PartitionOffset>,
+}
+
+// ---------------------------------------------------------------------------
+// Port: Kafka consumer (the adapter — `RdKafkaConsumer` — lives in
+// `crate::kafka::consumer`).
+// ---------------------------------------------------------------------------
+
 #[async_trait]
-pub trait StoreUsecase {
-    async fn execute(&self, command: StoreKafkaCommand) -> anyhow::Result<()>;
-}
-
-struct StoreUsecaseImpl {}
-
-impl StoreUsecaseImpl {
-    pub(crate) fn create_consumer(
+pub trait CoreKafkaConsumer: Send + Sync {
+    async fn initialize(&self) -> Result<()>;
+    async fn fetch_metadata(&self) -> Result<TopicMetadata>;
+    async fn fetch_offset_positions(&self) -> Result<TopicPartitionsAssignment>;
+    async fn assign(&self, tpl: TopicPartitionsAssignment) -> Result<()>;
+    /// Receive next KafkaMessage within the given timeout (milliseconds).
+    /// Returns `Ok(None)` on timeout without a message.
+    async fn recv_next(&self, timeout_ms: u64) -> Result<Option<KafkaMessage>>;
+    /// Stop the consumer and clean up resources.
+    async fn stop(&self) -> Result<()>;
+    /// Resolve a TPL whose `Offset(i64)` entries are millisecond timestamps
+    /// into a TPL whose entries are real offsets.
+    async fn offsets_for_times(
         &self,
-        command: &StoreKafkaCommand,
-    ) -> Result<impl CoreKafkaConsumer> {
-        RdKafkaConsumer::new(
-            command.bootstrap_servers.clone(),
-            command.topic.clone(),
-            command.group_id.clone(),
-        )
-    }
+        tpl: TopicPartitionsAssignment,
+        timeout_ms: u64,
+    ) -> Result<TopicPartitionsAssignment>;
 }
 
-// TODO: could be dependency
-fn create_consumer(command: &StoreKafkaCommand) -> Result<impl CoreKafkaConsumer> {
-    RdKafkaConsumer::new(
+// ---------------------------------------------------------------------------
+// Use-case entry point
+// ---------------------------------------------------------------------------
+
+type CommandExecutionResult = ();
+
+pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult> {
+    debug!("store command: {:?}", command);
+
+    let consumer = crate::kafka::consumer::create_rdkafka_consumer(
         command.bootstrap_servers.clone(),
         command.topic.clone(),
         command.group_id.clone(),
-    )
-}
-
-type CommandExecutionResult = ();
-pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult> {
-    debug!("store command: {:?}", command);
-    let consumer = create_consumer(&command)?;
+    )?;
     consumer.initialize().await?;
 
     let topic_metadata = consumer.fetch_metadata().await?;
     print_metadata(&topic_metadata);
 
-    let mut topic_assigment = parse_topic_assignment(&command, &topic_metadata);
+    let mut topic_assignment = parse_topic_assignment(&command, &topic_metadata);
 
-    if let StoreKafkaFrom::FromTimestamp(_) = command.from {
-        topic_assigment = consumer.offsets_for_times(topic_assigment, 10000).await?;
+    if matches!(command.from, StoreKafkaFrom::FromTimestamp(_)) {
+        topic_assignment = consumer.offsets_for_times(topic_assignment, 10_000).await?;
     }
 
-    consumer.assign(topic_assigment).await?;
+    consumer.assign(topic_assignment).await?;
 
     let topic_offset_positions = consumer.fetch_offset_positions().await?;
-    print_topic_offset_positions(&topic_offset_positions.inner);
+    print_topic_offset_positions(&topic_offset_positions);
 
     let consumer = Arc::new(consumer);
 
@@ -131,9 +184,7 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
             .await;
     };
 
-    // Run pump task with signal handling
     let processed = tokio::select! {
-        // Check for signals
         _ = ctrl_c => {
             info!("Received interrupt signal, shutting down gracefully...");
             return Err(anyhow::anyhow!("Interrupted by user"));
@@ -142,7 +193,6 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
             info!("Received termination signal, shutting down gracefully...");
             return Err(anyhow::anyhow!("Terminated by signal"));
         }
-        // Wait for pump task to complete
         result = pump_task.run() => {
             result?
         }
@@ -155,14 +205,78 @@ pub async fn store(command: StoreKafkaCommand) -> Result<CommandExecutionResult>
         .await
         .map_err(|e| anyhow::anyhow!("Storage close error: {}", e))?;
 
-    // Stop the consumer to clean up background threads
     consumer.stop().await?;
-
     info!("Finished storing messages");
     drop(consumer);
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Domain helpers
+// ---------------------------------------------------------------------------
+
+pub fn parse_topic_assignment(
+    cmd: &StoreKafkaCommand,
+    metadata: &TopicMetadata,
+) -> TopicPartitionsAssignment {
+    let domain_offset = match cmd.from {
+        StoreKafkaFrom::FromBegining => DomainOffset::Beginning,
+        StoreKafkaFrom::FromEnd => DomainOffset::End,
+        // For FromTimestamp the value is carried in the offset slot until
+        // `offsets_for_times` resolves it. See `DomainOffset` rustdoc.
+        StoreKafkaFrom::FromTimestamp(ts) => DomainOffset::Offset(ts),
+        StoreKafkaFrom::FromOffset(off) => DomainOffset::Offset(off as i64),
+    };
+    let entries = metadata
+        .partitions
+        .iter()
+        .map(|p| PartitionOffset {
+            topic: cmd.topic.clone(),
+            partition: p.id,
+            offset: domain_offset,
+        })
+        .collect();
+    TopicPartitionsAssignment { entries }
+}
+
+fn print_metadata(metadata: &TopicMetadata) {
+    info!("Topic metadata:");
+    info!("  Topic: {}", metadata.name);
+    for p in &metadata.partitions {
+        info!(
+            "    Partition {}: leader: {}, replicas: {:?}, isr: {:?}",
+            p.id, p.leader, p.replicas, p.isr
+        );
+    }
+}
+
+fn print_topic_offset_positions(tpl: &TopicPartitionsAssignment) {
+    info!("Topic partition list:");
+    for entry in &tpl.entries {
+        info!(
+            "  Topic: {}, Partition: {}, Offset: {:?}",
+            entry.topic, entry.partition, entry.offset
+        );
+    }
+}
+
+fn create_storage(command: &StoreKafkaCommand) -> Result<impl StorageBackend> {
+    match &command.store_to_storage {
+        StoreKafkaToStorageBackend::Directory(path) => {
+            let cfg = DirectoryStorageConfig {
+                base_dir: PathBuf::from(path),
+                ..Default::default()
+            };
+            Ok(DirectoryStorage::new(cfg))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pump task — bounded mpsc producer/writer pipeline with idle-timeout shutdown
+// (ADR-005).
+// ---------------------------------------------------------------------------
 
 struct PumpTask<S, D>
 where
@@ -181,29 +295,14 @@ where
     S: CoreKafkaConsumer + 'static,
     D: StorageBackend + 'static,
 {
-    pub fn new(
-        consumer: Arc<S>,
-        storage: Arc<D>,
-        channel_capacity: usize,
-        filter: MessageFilter,
-        limits: MessageLimits,
-    ) -> Self {
-        Self {
-            consumer,
-            storage,
-            channel_capacity,
-            filter,
-            limits,
-        }
-    }
-
-    /// Run the pump task, consuming self to ensure Arc references are dropped after completion
+    /// Run the pump task, consuming self to ensure Arc references are dropped
+    /// after completion.
     pub async fn run(self) -> Result<u64> {
         let (tx, mut rx) = mpsc::channel::<KafkaMessage>(self.channel_capacity);
         let consumer = self.consumer;
         let storage = self.storage;
-        let filter = self.filter; // Move filter to async block
-        let limits = self.limits; // Move limits to async block
+        let filter = self.filter;
+        let limits = self.limits;
         info!("Starting PumpTask");
 
         // Producer task: read from Kafka and send to channel
@@ -214,16 +313,13 @@ where
             loop {
                 match consumer.recv_next(200).await {
                     Ok(Some(msg)) => {
-                        // Apply filter
                         if filter.matches(&msg) {
-                            // Check limits
                             if limits.should_stop_before(&msg) {
                                 info!("Limit reached (before processing), stopping consumer");
                                 break;
                             }
 
                             if tx.send(msg.clone()).await.is_err() {
-                                // Receiver dropped, stop producing
                                 break;
                             }
                             produced += 1;
@@ -236,7 +332,6 @@ where
                         last_message_at = Instant::now();
                     }
                     Ok(None) => {
-                        // No message in this poll. If we've been idle long enough, stop.
                         if last_message_at.elapsed() >= idle_shutdown_after {
                             info!(
                                 "No new messages for {}ms, stopping consumer",
@@ -255,19 +350,17 @@ where
             produced
         });
 
-        // Consumer task: write to storage
+        // Writer task: write to storage
         let writer_handle = tokio::spawn(async move {
             let mut consumed: u64 = 0;
             while let Some(msg) = rx.recv().await {
                 if let Err(e) = storage.store_message(msg).await {
                     error!("Error storing message: {}", e);
-                    // Decide whether to stop on error; for now continue
                 } else {
                     consumed += 1;
                 }
             }
             info!("Finished storing messages: {consumed}");
-            // Flush at the end
             let _ = storage.flush().await;
             consumed
         });
@@ -275,7 +368,6 @@ where
         let produced = producer_handle
             .await
             .map_err(|e| anyhow::anyhow!("Producer task join error: {}", e))?;
-        // tx is dropped when producer task ends; channel closes and writer finishes
         let consumed = writer_handle
             .await
             .map_err(|e| anyhow::anyhow!("Writer task join error: {}", e))?;
@@ -287,6 +379,7 @@ where
         Ok(consumed)
     }
 }
+
 fn create_task<S, D>(
     consumer: Arc<S>,
     storage: Arc<D>,
@@ -301,13 +394,17 @@ where
     let limits = MessageLimits::new(command);
 
     Ok(PumpTask {
-        consumer: consumer.clone(),
-        storage: storage.clone(),
+        consumer,
+        storage,
         channel_capacity,
         filter,
         limits,
     })
 }
+
+// ---------------------------------------------------------------------------
+// Filtering & limits (pure domain)
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
 struct MessageLimits {
@@ -333,13 +430,11 @@ impl MessageLimits {
                 }
             }
         }
-
         if let Some(offset_limit) = self.until_offset {
             if message.offset >= offset_limit as i64 {
                 return true;
             }
         }
-
         false
     }
 
@@ -378,14 +473,12 @@ impl MessageFilter {
     }
 
     fn matches(&self, message: &KafkaMessage) -> bool {
-        // Filter by partition
         if let Some(partitions) = &self.partitions {
             if !partitions.contains(&message.partition) {
                 return false;
             }
         }
 
-        // Filter by key regex
         if let Some(regex) = &self.key_regex {
             if let Some(key) = &message.key {
                 if let Ok(key_str) = std::str::from_utf8(key) {
@@ -393,16 +486,13 @@ impl MessageFilter {
                         return false;
                     }
                 } else {
-                    // If key is not valid UTF-8, it doesn't match a string regex
                     return false;
                 }
             } else {
-                // No key, doesn't match
                 return false;
             }
         }
 
-        // Filter by headers
         if let Some(filter_headers) = &self.headers {
             let msg_headers = &message.headers;
             for (k, v) in filter_headers {
@@ -411,7 +501,6 @@ impl MessageFilter {
                         return false;
                     }
                 } else {
-                    // Header missing
                     return false;
                 }
             }
@@ -420,457 +509,3 @@ impl MessageFilter {
         true
     }
 }
-
-use std::path::PathBuf;
-
-fn create_storage(command: &StoreKafkaCommand) -> Result<impl StorageBackend> {
-    match &command.store_to_storage {
-        StoreKafkaToStorageBackend::Directory(path) => {
-            let mut cfg = DirectoryStorageConfig::default();
-            cfg.base_dir = PathBuf::from(path);
-            let storage = DirectoryStorage::new(cfg);
-            Ok(storage)
-        }
-    }
-}
-
-pub fn parse_topic_assignment(
-    store_kafka_command: &StoreKafkaCommand,
-    metadata: &TopicMetadata,
-) -> TopicPartitionsAssignment {
-    match store_kafka_command.from {
-        StoreKafkaFrom::FromBegining => {
-            let mut topic_partition_list = TopicPartitionList::new();
-            if let Some(topic_meta) = metadata.topic_metadata() {
-                for partition in topic_meta.partitions() {
-                    topic_partition_list
-                        .add_partition_offset(
-                            &store_kafka_command.topic,
-                            partition.id(),
-                            Offset::Beginning,
-                        )
-                        .expect("Failed to add partition offset");
-                }
-            }
-            TopicPartitionsAssignment::from_rdkafka(topic_partition_list)
-        }
-        StoreKafkaFrom::FromEnd => {
-            let mut topic_partition_list = TopicPartitionList::new();
-            if let Some(topic_meta) = metadata.topic_metadata() {
-                for partition in topic_meta.partitions() {
-                    topic_partition_list
-                        .add_partition_offset(
-                            &store_kafka_command.topic,
-                            partition.id(),
-                            Offset::End,
-                        )
-                        .expect("Failed to add partition offset");
-                }
-            }
-            TopicPartitionsAssignment::from_rdkafka(topic_partition_list)
-        }
-        StoreKafkaFrom::FromTimestamp(ts) => {
-            let mut topic_partition_list = TopicPartitionList::new();
-            if let Some(topic_meta) = metadata.topic_metadata() {
-                for partition in topic_meta.partitions() {
-                    topic_partition_list
-                        .add_partition_offset(
-                            &store_kafka_command.topic,
-                            partition.id(),
-                            Offset::Offset(ts),
-                        )
-                        .expect("Failed to add partition offset");
-                }
-            }
-            TopicPartitionsAssignment::from_rdkafka(topic_partition_list)
-        }
-        StoreKafkaFrom::FromOffset(offset) => {
-            let mut topic_partition_list = TopicPartitionList::new();
-            if let Some(topic_meta) = metadata.topic_metadata() {
-                for partition in topic_meta.partitions() {
-                    topic_partition_list
-                        .add_partition_offset(
-                            &store_kafka_command.topic,
-                            partition.id(),
-                            Offset::Offset(offset as i64),
-                        )
-                        .expect("Failed to add partition offset");
-                }
-            }
-            TopicPartitionsAssignment::from_rdkafka(topic_partition_list)
-        }
-    }
-}
-
-fn print_topic_offset_positions(topic_offset_positions: &TopicPartitionList) {
-    info!("Topic partition list:");
-    for partition in topic_offset_positions.elements() {
-        info!(
-            "  Topic: {}, Partition: {}, Offset: {:?}",
-            partition.topic(),
-            partition.partition(),
-            partition.offset()
-        );
-    }
-}
-
-fn print_metadata(metadata: &TopicMetadata) {
-    info!("Topic metadata:");
-    if let Some(topic) = metadata.topic_metadata() {
-        info!("  Topic: {}", topic.name());
-        for partition in topic.partitions() {
-            info!(
-                "    Partition {}: leader: {}, replicas: {:?}, isr: {:?}",
-                partition.id(),
-                partition.leader(),
-                partition.replicas(),
-                partition.isr()
-            );
-        }
-    } else {
-        info!("  Topic not found in metadata: {}", metadata.topic);
-    }
-}
-
-// impl StoreUsecase for StoreUsecaseImpl {
-//     async fn execute(&self, command: StoreKafkaCommand) -> anyhow::Result<()> {
-//         let consumer = self.create_consumer(&command);
-//         let topic_metadata = consumer.fetch_metadata()?;
-//
-//         let kafka_start_offsets: = parse_start_offsets(&command.from)?;
-//         let kafka_end_offsets = parse_end_offsets(&command.to)?;
-//
-//         info!("kafka_start_offsets: {:?}", kafka_start_offsets);
-//         info!("kafka_end_offsets: {:?}", kafka_end_offsets);
-//
-//         // TODO: extract to dependency
-//         let consumer = self.create_consumer(&command);
-//         consumer.initialize().await?;
-//
-//
-//         Ok(())
-//     }
-// }
-
-// kafka-consumer
-// BLOCK begin
-#[async_trait]
-pub trait CoreKafkaConsumer: Send + Sync {
-    async fn initialize(&self) -> Result<()>;
-    async fn fetch_metadata(&self) -> Result<TopicMetadata>;
-    async fn fetch_offset_positions(&self) -> Result<TopicPartitionsAssignment>;
-    async fn assign(&self, tpl: TopicPartitionsAssignment) -> Result<()>;
-    /// Receive next KafkaMessage within the given timeout (milliseconds).
-    /// Returns Ok(None) on timeout without a message.
-    async fn recv_next(&self, timeout_ms: u64) -> Result<Option<KafkaMessage>>;
-    /// Stop the consumer and clean up resources
-    async fn stop(&self) -> Result<()>;
-    /// Look up offsets for times
-    async fn offsets_for_times(
-        &self,
-        tpl: TopicPartitionsAssignment,
-        timeout_ms: u64,
-    ) -> Result<TopicPartitionsAssignment>;
-}
-
-struct TopicMetadata {
-    inner: Metadata,
-    topic: String,
-}
-impl TopicMetadata {
-    pub fn from_rdkafka(metadata: Metadata, topic: String) -> TopicMetadata {
-        TopicMetadata {
-            inner: metadata,
-            topic,
-        }
-    }
-
-    fn topic_metadata(&self) -> Option<&MetadataTopic> {
-        self.inner
-            .topics()
-            .iter()
-            .find(|t| t.name() == self.topic)
-            .or_else(|| self.inner.topics().first())
-    }
-
-    /// Create an owned snapshot of the topic metadata, detached from the
-    /// underlying rdkafka::metadata::Metadata lifetime.
-    /// Returns None if the topic is not present in the metadata.
-    pub fn owned(&self) -> Option<OwnedTopicMetadata> {
-        self.topic_metadata().map(|t| {
-            let partitions = t
-                .partitions()
-                .iter()
-                .map(|p| OwnedPartitionMetadata {
-                    id: p.id(),
-                    leader: p.leader(),
-                    replicas: p.replicas().to_vec(),
-                    isr: p.isr().to_vec(),
-                })
-                .collect();
-            OwnedTopicMetadata {
-                name: t.name().to_string(),
-                partitions,
-            }
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-struct OwnedTopicMetadata {
-    name: String,
-    partitions: Vec<OwnedPartitionMetadata>,
-}
-
-#[derive(Debug, Clone)]
-struct OwnedPartitionMetadata {
-    id: i32,
-    leader: i32,
-    replicas: Vec<i32>,
-    isr: Vec<i32>,
-}
-
-struct TopicPartitionsAssignment {
-    inner: TopicPartitionList,
-}
-
-impl TopicPartitionsAssignment {
-    pub fn from_rdkafka(tpl: TopicPartitionList) -> TopicPartitionsAssignment {
-        TopicPartitionsAssignment { inner: tpl }
-    }
-}
-
-fn convert_to_kafka_message(message: &OwnedMessage) -> KafkaMessage {
-    let key = message.key().map(|k| k.to_vec());
-    let payload = message.payload().map(|p| p.to_vec());
-    let topic = message.topic().to_string();
-    let partition = message.partition();
-    let offset = message.offset();
-    let timestamp = message.timestamp().to_millis();
-
-    let mut kafka_message = KafkaMessage::new(key, payload, topic, partition, offset);
-
-    if let Some(ts) = timestamp {
-        kafka_message = kafka_message.with_timestamp(ts);
-    }
-
-    if let Some(headers) = message.headers() {
-        for i in 0..headers.count() {
-            let header = headers.get(i);
-            if let Some(value_bytes) = header.value {
-                if let Ok(value_str) = std::str::from_utf8(value_bytes) {
-                    kafka_message = kafka_message.with_header(header.key, value_str);
-                }
-            }
-        }
-    }
-
-    kafka_message
-}
-
-struct RdKafkaConsumer {
-    bootstrap_servers: String,
-    topic: String,
-    group_id: String,
-    inner_consumer: Mutex<Option<LoggedConsumer>>,
-}
-
-impl RdKafkaConsumer {
-    pub fn new(bootstrap_servers: String, topic: String, group_id: String) -> Result<Self> {
-        let context = KafkaConsumerContext;
-        let mut client_config = ClientConfig::new();
-
-        client_config
-            .set("bootstrap.servers", &bootstrap_servers)
-            .set("group.id", &group_id)
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest") // Always start from earliest by default
-            .set("enable.partition.eof", "false")
-            .set("session.timeout.ms", "6000")
-            .set("max.poll.interval.ms", "300000")
-            .set_log_level(RDKafkaLogLevel::Debug);
-
-        let consumer: LoggedConsumer = client_config.create_with_context(context)?;
-        Ok(Self {
-            bootstrap_servers,
-            topic,
-            group_id,
-            inner_consumer: Mutex::new(Some(consumer)),
-        })
-    }
-
-    fn with_consumer<T>(&self, f: impl FnOnce(&LoggedConsumer) -> Result<T>) -> Result<T> {
-        let guard = self
-            .inner_consumer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Kafka consumer lock poisoned"))?;
-        let consumer = guard
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Kafka consumer already stopped"))?;
-        f(consumer)
-    }
-
-    fn take_consumer(&self) -> Result<Option<LoggedConsumer>> {
-        let mut guard = self
-            .inner_consumer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Kafka consumer lock poisoned"))?;
-        Ok(guard.take())
-    }
-}
-
-#[async_trait]
-impl CoreKafkaConsumer for RdKafkaConsumer {
-    // TODO: decide what to do with this
-    async fn initialize(&self) -> Result<()> {
-        let metadata = self.with_consumer(|consumer| {
-            consumer
-                .fetch_metadata(
-                    Some(&self.topic),
-                    Timeout::After(Duration::from_secs(10)),
-                )
-                .map_err(|e| anyhow::anyhow!("Error fetching metadata: {}", e))
-        })?;
-
-        if metadata.topics().is_empty() || metadata.topics().first().unwrap().name() != self.topic {
-            return Err(anyhow::anyhow!("Topic '{}' not found", self.topic));
-        }
-        Ok(())
-    }
-
-    async fn fetch_metadata(&self) -> Result<TopicMetadata> {
-        let metadata = self.with_consumer(|consumer| {
-            consumer
-                .fetch_metadata(
-                    Some(&self.topic),
-                    // TODO: extract to config
-                    Timeout::After(Duration::from_secs(10)),
-                )
-                .map_err(|e| anyhow::anyhow!("Error fetching metadata: {}", e))
-        })?;
-        if let Some(first_topic_metadata) = metadata.topics().first() {
-            if first_topic_metadata.name() != self.topic {
-                return Err(anyhow::anyhow!("Topic '{}' not found", self.topic));
-            }
-            if first_topic_metadata.partitions().is_empty() {
-                return Err(anyhow::anyhow!("Topic '{}' has no partitions", self.topic));
-            }
-            Ok(TopicMetadata::from_rdkafka(metadata, self.topic.clone()))
-        } else {
-            Err(anyhow::anyhow!("Topic '{}' not found", self.topic))
-        }
-    }
-
-    async fn fetch_offset_positions(&self) -> Result<TopicPartitionsAssignment> {
-        self.with_consumer(|consumer| {
-            consumer
-                .assignment()
-                .map(TopicPartitionsAssignment::from_rdkafka)
-                .map_err(|e| anyhow::anyhow!("Error fetching offset positions: {}", e))
-        })
-    }
-
-    async fn assign(&self, tpl: TopicPartitionsAssignment) -> Result<()> {
-        self.with_consumer(|consumer| {
-            consumer
-                .assign(&tpl.inner)
-                .map_err(|e| anyhow::anyhow!("Error assigning partitions: {}", e))
-        })
-    }
-
-    async fn recv_next(&self, timeout_ms: u64) -> Result<Option<KafkaMessage>> {
-        let timeout = Duration::from_millis(timeout_ms);
-        let owned = tokio::task::block_in_place(|| {
-            self.with_consumer(|consumer| match consumer.poll(timeout) {
-                None => Ok(None),
-                Some(Err(e)) => Err(anyhow::anyhow!("Kafka receive error: {}", e)),
-                Some(Ok(bmsg)) => Ok(Some(bmsg.detach())),
-            })
-        })?;
-        Ok(owned.map(|msg| convert_to_kafka_message(&msg)))
-    }
-
-    async fn stop(&self) -> Result<()> {
-        let consumer = self.take_consumer()?;
-        if let Some(consumer) = consumer {
-            // Clear partition assignment before cleanup
-            if let Err(e) = consumer.unassign() {
-                warn!("Kafka consumer unassign error: {}", e);
-            }
-
-            // Unsubscribe from all topics to clean up
-            consumer.unsubscribe();
-
-            // Close the consumer cleanly and poll until closed.
-            use rdkafka::bindings as rdkafka_sys;
-            use rdkafka::bindings::rd_kafka_resp_err_t;
-            let native_ptr = consumer.client().native_ptr();
-            let close_err = unsafe { rdkafka_sys::rd_kafka_consumer_close(native_ptr) };
-            if close_err != rd_kafka_resp_err_t::RD_KAFKA_RESP_ERR_NO_ERROR {
-                warn!("Kafka consumer close error: {:?}", close_err);
-            }
-
-            let close_deadline = Instant::now() + Duration::from_secs(5);
-            while Instant::now() < close_deadline {
-                let msg_ptr = unsafe { rdkafka_sys::rd_kafka_consumer_poll(native_ptr, 100) };
-                if !msg_ptr.is_null() {
-                    unsafe { rdkafka_sys::rd_kafka_message_destroy(msg_ptr) };
-                }
-
-                let closed = unsafe { rdkafka_sys::rd_kafka_consumer_closed(native_ptr) == 1 };
-                if closed {
-                    break;
-                }
-            }
-
-            let closed = unsafe { rdkafka_sys::rd_kafka_consumer_closed(native_ptr) == 1 };
-            if !closed {
-                warn!("Kafka consumer did not close within timeout");
-            }
-
-            // Leak the consumer handle to avoid hanging in rd_kafka_destroy.
-            std::mem::forget(consumer);
-        }
-        Ok(())
-    }
-
-    async fn offsets_for_times(
-        &self,
-        tpl: TopicPartitionsAssignment,
-        timeout_ms: u64,
-    ) -> Result<TopicPartitionsAssignment> {
-        let result = self.with_consumer(|consumer| {
-            consumer
-                .offsets_for_times(
-                    tpl.inner,
-                    Timeout::After(Duration::from_millis(timeout_ms)),
-                )
-                .map_err(|e| anyhow::anyhow!("Error fetching offsets for times: {}", e))
-        })?;
-        Ok(TopicPartitionsAssignment::from_rdkafka(result))
-    }
-}
-
-/// Custom context for the Kafka consumer
-struct KafkaConsumerContext;
-
-impl ClientContext for KafkaConsumerContext {}
-
-impl ConsumerContext for KafkaConsumerContext {
-    fn pre_rebalance(&self, rebalance: &Rebalance) {
-        debug!("Pre-rebalance: {:?}", rebalance);
-    }
-
-    fn post_rebalance(&self, rebalance: &Rebalance) {
-        debug!("Post-rebalance: {:?}", rebalance);
-    }
-
-    fn commit_callback(&self, result: KafkaResult<()>, _offsets: &TopicPartitionList) {
-        match result {
-            std::prelude::rust_2015::Ok(_) => debug!("Offsets committed successfully"),
-            Err(e) => warn!("Error committing offsets: {:?}", e),
-        }
-    }
-}
-
-type LoggedConsumer = BaseConsumer<KafkaConsumerContext>;
